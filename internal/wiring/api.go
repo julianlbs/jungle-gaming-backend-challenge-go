@@ -8,6 +8,10 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 
@@ -25,11 +29,59 @@ var API = fx.Module("api",
 				Issuer: cfg.Auth.Issuer, JWKSURL: cfg.Auth.JWKSURL, Audience: cfg.Auth.Audience,
 			})
 		},
-		func(pool *pgxpool.Pool) *httpapi.Readiness { return httpapi.NewReadiness(pool.Ping) },
+		newReadiness,
 		newAPI,
 	),
 	fx.Invoke(registerHTTPServer),
 )
+
+type readinessDeps struct {
+	fx.In
+	Cfg  config.Config
+	Pool *pgxpool.Pool
+	SQS  *sqs.Client `optional:"true"`
+	SNS  *sns.Client `optional:"true"`
+}
+
+// newReadiness probes every dependency the enabled roles use.
+func newReadiness(d readinessDeps) *httpapi.Readiness {
+	checks := []httpapi.ReadinessCheck{{Name: "database", Check: d.Pool.Ping}}
+	if d.Cfg.Roles.Has(config.RoleConsumer) && d.SQS != nil {
+		checks = append(checks, httpapi.ReadinessCheck{Name: "sqs", Check: sqsCheck(d.SQS, d.Cfg.SQS.QueueURL)})
+	}
+	if d.Cfg.Roles.Has(config.RoleOutbox) && d.SNS != nil {
+		checks = append(checks, httpapi.ReadinessCheck{Name: "sns", Check: snsCheck(d.SNS, d.Cfg.SNS.TopicARN)})
+	}
+	return httpapi.NewReadiness(checks...)
+}
+
+type queueAttributesAPI interface {
+	GetQueueAttributes(context.Context, *sqs.GetQueueAttributesInput, ...func(*sqs.Options)) (*sqs.GetQueueAttributesOutput, error)
+}
+
+type topicAttributesAPI interface {
+	GetTopicAttributes(context.Context, *sns.GetTopicAttributesInput, ...func(*sns.Options)) (*sns.GetTopicAttributesOutput, error)
+}
+
+func sqsCheck(c queueAttributesAPI, queueURL string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := c.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+			QueueUrl:       aws.String(queueURL),
+			AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
+		}, withoutRetries)
+		return err
+	}
+}
+
+func snsCheck(c topicAttributesAPI, topicARN string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := c.GetTopicAttributes(ctx, &sns.GetTopicAttributesInput{TopicArn: aws.String(topicARN)},
+			func(o *sns.Options) { o.RetryMaxAttempts = 1 })
+		return err
+	}
+}
+
+func withoutRetries(o *sqs.Options) { o.RetryMaxAttempts = 1 }
 
 func newAPI(log *slog.Logger, m *metrics.Metrics, v httpapi.TokenVerifier, opener *app.WalletOpener,
 	wagers *app.WagerProcessor, queries *app.Queries, ready *httpapi.Readiness) *httpapi.API {

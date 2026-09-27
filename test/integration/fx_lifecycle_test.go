@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +107,50 @@ func TestApplicationStartsAndShutsDownGracefully(t *testing.T) {
 	}
 	if n := countRows(t, f.db, `SELECT count(*) FROM outbox_events WHERE locked_by IS NOT NULL`); n != 0 {
 		t.Fatalf("%d outbox leases held after shutdown", n)
+	}
+}
+
+func TestReadinessFailsWhenTheWagerQueueIsMissing(t *testing.T) {
+	f := newAppFixture(t)
+	a := newAWS(t)
+	dlq := a.fifoQueue(t, "dlq", "", 0)
+	issuer := authtest.NewTokenIssuer(t)
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	httpAddr := freeAddr(t)
+	endpoint := getenv("TEST_AWS_ENDPOINT_URL", "http://localhost:4566")
+	vars := map[string]string{
+		"APP_ROLES":             "api,consumer",
+		"INSTANCE_ID":           "readiness-test",
+		"HTTP_ADDR":             httpAddr,
+		"METRICS_ADDR":          freeAddr(t),
+		"LOG_LEVEL":             "error",
+		"DATABASE_URL":          withDatabase(env.appURL, f.db.Name),
+		"OIDC_ISSUER":           authtest.Issuer,
+		"OIDC_JWKS_URL":         issuer.JWKSURL(),
+		"OIDC_AUDIENCE":         authtest.Audience,
+		"AWS_ENDPOINT_URL":      endpoint,
+		"SQS_WAGER_QUEUE_URL":   endpoint + "/000000000000/missing-" + f.db.Name + ".fifo",
+		"SQS_WAGER_DLQ_URL":     dlq,
+		"SQS_ALLOWED_PROVIDERS": "provider-a",
+	}
+	cfg, err := config.Load(func(k string) (string, bool) { v, ok := vars[k]; return v, ok })
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := fx.New(wiring.Options(cfg))
+	startCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := application.Start(startCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Stop(context.Background()) })
+
+	resp := must(http.Get("http://" + httpAddr + "/health/ready"))
+	body := must(io.ReadAll(resp.Body))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "sqs unavailable") {
+		t.Fatalf("ready = %d %s", resp.StatusCode, body)
 	}
 }

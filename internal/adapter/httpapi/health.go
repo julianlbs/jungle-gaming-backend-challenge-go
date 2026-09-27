@@ -11,11 +11,26 @@ import (
 // shutdown starts so that load balancers stop routing before the server drains.
 type Readiness struct {
 	draining atomic.Bool
-	check    func(context.Context) error
+	checks   []ReadinessCheck
 }
 
-func NewReadiness(check func(context.Context) error) *Readiness {
-	return &Readiness{check: check}
+// ReadinessCheck is a cheap probe of one dependency.
+type ReadinessCheck struct {
+	Name  string
+	Check func(context.Context) error
+}
+
+func NewReadiness(checks ...ReadinessCheck) *Readiness {
+	return &Readiness{checks: checks}
+}
+
+// Checks names the probed dependencies in order.
+func (h *Readiness) Checks() []string {
+	names := make([]string, len(h.checks))
+	for i, c := range h.checks {
+		names[i] = c.Name
+	}
+	return names
 }
 
 func (h *Readiness) StartDraining() { h.draining.Store(true) }
@@ -24,11 +39,11 @@ func (h *Readiness) Ready(ctx context.Context) (string, bool) {
 	if h.draining.Load() {
 		return "draining", false
 	}
-	if h.check != nil {
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		if err := h.check(ctx); err != nil {
-			return "database unavailable", false
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	for _, c := range h.checks {
+		if err := c.Check(ctx); err != nil {
+			return c.Name + " unavailable", false
 		}
 	}
 	return "ok", true

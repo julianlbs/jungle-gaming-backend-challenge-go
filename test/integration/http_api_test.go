@@ -31,15 +31,13 @@ func newAPIFixture(t *testing.T) *apiFixture {
 	f := newAppFixture(t)
 	issuer := authtest.NewTokenIssuer(t)
 	api := httpapi.NewAPI(httpapi.Deps{
-		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Metrics:  metrics.New(),
-		Verifier: auth.NewVerifier(context.Background(), auth.Config{Issuer: authtest.Issuer, JWKSURL: issuer.JWKSURL(), Audience: authtest.Audience}),
-		Wallets:  f.opener,
-		Wagers:   f.processor,
-		Queries:  app.NewQueries(postgres.NewReadModel(f.db.App), app.SystemClock{}),
-		Readiness: httpapi.NewReadiness(func(ctx context.Context) error {
-			return f.db.App.Ping(ctx)
-		}),
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics:   metrics.New(),
+		Verifier:  auth.NewVerifier(context.Background(), auth.Config{Issuer: authtest.Issuer, JWKSURL: issuer.JWKSURL(), Audience: authtest.Audience}),
+		Wallets:   f.opener,
+		Wagers:    f.processor,
+		Queries:   app.NewQueries(postgres.NewReadModel(f.db.App), app.SystemClock{}),
+		Readiness: httpapi.NewReadiness(httpapi.ReadinessCheck{Name: "database", Check: f.db.App.Ping}),
 	})
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
