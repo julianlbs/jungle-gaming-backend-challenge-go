@@ -19,6 +19,12 @@ func testConfig(t *testing.T, roles string) config.Config {
 			"OIDC_ISSUER":   "http://keycloak:8080/realms/wallet",
 			"OIDC_JWKS_URL": "http://keycloak:8080/realms/wallet/protocol/openid-connect/certs",
 			"OIDC_AUDIENCE": "wallet-api",
+
+			"AWS_REGION":            "us-east-1",
+			"SQS_WAGER_QUEUE_URL":   "http://localstack:4566/000000000000/wager-transactions.fifo",
+			"SQS_WAGER_DLQ_URL":     "http://localstack:4566/000000000000/wager-transactions-dlq.fifo",
+			"SQS_ALLOWED_PROVIDERS": "provider-a",
+			"SNS_EVENTS_TOPIC_ARN":  "arn:aws:sns:us-east-1:000000000000:wallet-events.fifo",
 		}[k]
 		return v, ok
 	})
@@ -38,7 +44,12 @@ func TestDependencyGraphIsComplete(t *testing.T) {
 	}
 }
 
-func TestAPIRoleGraphIsComplete(t *testing.T) {
+func TestEachRoleGraphIsComplete(t *testing.T) {
+	for _, roles := range []string{"api", "consumer", "outbox", "pending", "api,consumer,outbox,pending"} {
+		if err := fx.ValidateApp(Options(testConfig(t, roles))); err != nil {
+			t.Errorf("%s: %v", roles, err)
+		}
+	}
 	err := fx.ValidateApp(
 		Options(testConfig(t, "api")),
 		fx.Invoke(func(*httpapi.API) {}),

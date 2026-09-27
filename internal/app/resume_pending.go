@@ -29,6 +29,19 @@ const (
 	ResumeFailed
 )
 
+func (r ResumeResult) String() string {
+	switch r {
+	case ResumeRescheduled:
+		return "rescheduled"
+	case ResumeSettled:
+		return "settled"
+	case ResumeFailed:
+		return "failed"
+	default:
+		return "skipped"
+	}
+}
+
 type PendingResumer struct {
 	uow    UnitOfWork
 	queue  PendingQueue

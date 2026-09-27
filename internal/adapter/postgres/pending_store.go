@@ -75,3 +75,12 @@ func (s *PendingStore) NudgeWaiting(ctx context.Context, providerID, referenceEx
 	}
 	return nil
 }
+
+func (s *PendingStore) CountWaiting(ctx context.Context) (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(ctx,
+		`SELECT count(*) FROM wager_transactions WHERE status = 'PENDING_REFERENCE'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count waiting transactions: %w", err)
+	}
+	return n, nil
+}

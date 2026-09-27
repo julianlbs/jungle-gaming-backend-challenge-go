@@ -79,6 +79,35 @@ func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxSto
 	})
 }
 
+var Pending = fx.Module("pending", fx.Invoke(registerPendingWorker))
+
+func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.PendingResumer, store *postgres.PendingStore,
+	log *slog.Logger, m *metrics.Metrics) {
+	log = log.With("worker", "pending-references")
+	lifecycle.Register(lc, log, "pending-references", func(ctx context.Context) {
+		lifecycle.Every(ctx, log, "pending-references", cfg.Pending.PollInterval, func(ctx context.Context) {
+			for ctx.Err() == nil {
+				results, err := resumer.RunOnce(ctx, cfg.Pending.Lease, cfg.Pending.BatchSize)
+				claimed := 0
+				for res, n := range results {
+					m.ReferenceResolutions.WithLabelValues(res.String()).Add(float64(n))
+					claimed += n
+				}
+				if err != nil && ctx.Err() == nil {
+					log.Warn("resuming pending operations failed", "error", err)
+					break
+				}
+				if claimed < cfg.Pending.BatchSize {
+					break
+				}
+			}
+			if n, err := store.CountWaiting(ctx); err == nil {
+				m.PendingReferences.Set(float64(n))
+			}
+		})
+	})
+}
+
 func registerConsumer(lc fx.Lifecycle, cfg config.Config, client *sqs.Client, intake *app.WagerIntake,
 	log *slog.Logger, m *metrics.Metrics) {
 	c := sqsconsumer.New(client, intake, sqsconsumer.Config{

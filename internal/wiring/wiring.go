@@ -37,6 +37,9 @@ func Options(cfg config.Config) fx.Option {
 	if cfg.Roles.Has(config.RoleOutbox) {
 		roles = append(roles, Outbox)
 	}
+	if cfg.Roles.Has(config.RolePending) {
+		roles = append(roles, Pending)
+	}
 	return fx.Options(
 		fx.Options(roles...),
 		fx.Supply(cfg),
