@@ -42,10 +42,10 @@ func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) Problem {
 }
 
 func TestAuthenticationAndScopes(t *testing.T) {
-	a := NewAPI(discardLog, metrics.New(), fakeVerifier{
+	a := NewAPI(Deps{Log: discardLog, Metrics: metrics.New(), Verifier: fakeVerifier{
 		"reader": {ClientID: "r", Scopes: []string{auth.ScopeWalletsRead}},
 		"other":  {ClientID: "o", Scopes: []string{auth.ScopeWageringRead}},
-	})
+	}})
 	a.protected("GET /thing", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }, auth.ScopeWalletsRead)
 	h := a.Handler()
 
@@ -85,7 +85,7 @@ func TestAuthenticationAndScopes(t *testing.T) {
 }
 
 func TestCorrelationIDAndPanicRecovery(t *testing.T) {
-	a := NewAPI(discardLog, metrics.New(), fakeVerifier{})
+	a := NewAPI(Deps{Log: discardLog, Metrics: metrics.New(), Verifier: fakeVerifier{}})
 	a.public("GET /boom", func(http.ResponseWriter, *http.Request) { panic("boom") })
 	h := a.Handler()
 
