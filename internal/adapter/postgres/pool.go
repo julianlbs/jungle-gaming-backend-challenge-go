@@ -50,6 +50,9 @@ func PingWithRetry(ctx context.Context, pool *pgxpool.Pool) error {
 			return nil
 		}
 		if ctx.Err() != nil {
+			if errors.Is(err, ctx.Err()) {
+				return fmt.Errorf("postgres not reachable: %w", err)
+			}
 			return fmt.Errorf("postgres not reachable: %w", errors.Join(err, ctx.Err()))
 		}
 		select {
