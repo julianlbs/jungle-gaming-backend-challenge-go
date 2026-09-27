@@ -32,6 +32,7 @@ func TestClassify(t *testing.T) {
 		{"idempotency race", pg("23505", "wager_tx_provider_idempotency_key"), classUniqueRace, reasonUniqueRace},
 		{"external id race", pg("23505", "wager_tx_provider_external_key"), classUniqueRace, reasonUniqueRace},
 		{"reversal race", pg("23505", "wager_tx_single_reversal"), classUniqueRace, reasonUniqueRace},
+		{"inbox redelivery race", pg("23505", "inbox_messages_pkey"), classUniqueRace, reasonUniqueRace},
 		{"business unique", pg("23505", "wallets_player_currency_key"), classPermanent, ""},
 		{"check violation", pg("23514", "wallets_balance_check"), classPermanent, ""},
 		{"undefined column", pg("42703", ""), classPermanent, ""},

@@ -32,6 +32,7 @@ var raceConstraints = map[string]struct{}{
 	"wager_tx_provider_external_key":    {},
 	"wager_tx_provider_idempotency_key": {},
 	"wager_tx_single_reversal":          {},
+	"inbox_messages_pkey":               {},
 }
 
 func classify(err error) (errorClass, string) {
