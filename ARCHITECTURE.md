@@ -547,7 +547,11 @@ As métricas `wager_*` são registradas pelo caso de uso, então HTTP e SQS são
 forma; os labels vêm de conjuntos fechados (tipo inválido vira `UNKNOWN`) e nunca levam
 identificadores. `wallet_concurrency_conflicts_total` conta cada falha por lock timeout,
 serialização ou deadlock, inclusive a última tentativa, e cada verificação de versão perdida.
-O atraso da outbox é observado por `outbox_oldest_pending_age_seconds`.
+O atraso da outbox é observado por `outbox_oldest_pending_age_seconds`. Os gauges
+`outbox_pending_events`, `outbox_oldest_pending_age_seconds` e `pending_reference_transactions`
+são atualizados a cada segundo por coletores próprios dos papéis `outbox` e `pending`, separados
+dos workers: sob backlog contínuo o laço do relay não termina, e um gauge atualizado só ao fim
+dele ficaria congelado justamente quando o atraso cresce.
 
 - **Tracing** com OpenTelemetry, contexto propagado no formato W3C (`traceparent`):
 

@@ -43,7 +43,7 @@ var Consumer = fx.Module("consumer",
 
 var Outbox = fx.Module("outbox",
 	fx.Provide(func(cfg aws.Config) *sns.Client { return sns.NewFromConfig(cfg) }),
-	fx.Invoke(registerRelay, registerOutboxPurge),
+	fx.Invoke(registerRelay, registerOutboxPurge, registerOutboxBacklog),
 )
 
 func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxStore, client *sns.Client,
@@ -66,9 +66,6 @@ func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxSto
 			if err := relay.Drain(ctx); err != nil && ctx.Err() == nil {
 				log.Warn("outbox claim failed", "error", err)
 			}
-			if count, age, err := store.Backlog(ctx); err == nil {
-				m.ObserveOutboxBacklog(count, age)
-			}
 		})
 		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -77,6 +74,20 @@ func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxSto
 		} else if n > 0 {
 			log.Info("released outbox leases", "count", n)
 		}
+	})
+}
+
+// backlogInterval paces the backlog gauges independently of the workers, whose drain loops do
+// not return while a backlog persists.
+const backlogInterval = time.Second
+
+func registerOutboxBacklog(lc fx.Lifecycle, store *postgres.OutboxStore, log *slog.Logger, m *metrics.Metrics) {
+	lifecycle.Register(lc, log, "outbox-backlog", func(ctx context.Context) {
+		lifecycle.Every(ctx, log, "outbox-backlog", backlogInterval, func(ctx context.Context) {
+			if count, age, err := store.Backlog(ctx); err == nil {
+				m.ObserveOutboxBacklog(count, age)
+			}
+		})
 	})
 }
 
@@ -109,10 +120,19 @@ func purgeOutbox(ctx context.Context, store *postgres.OutboxStore, before time.T
 	return total, ctx.Err()
 }
 
-var Pending = fx.Module("pending", fx.Invoke(registerPendingWorker))
+var Pending = fx.Module("pending", fx.Invoke(registerPendingWorker, registerPendingBacklog))
 
-func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.PendingResumer, store *postgres.PendingStore,
-	log *slog.Logger, m *metrics.Metrics) {
+func registerPendingBacklog(lc fx.Lifecycle, store *postgres.PendingStore, log *slog.Logger, m *metrics.Metrics) {
+	lifecycle.Register(lc, log, "pending-backlog", func(ctx context.Context) {
+		lifecycle.Every(ctx, log, "pending-backlog", backlogInterval, func(ctx context.Context) {
+			if n, err := store.CountWaiting(ctx); err == nil {
+				m.PendingReferences.Set(float64(n))
+			}
+		})
+	})
+}
+
+func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.PendingResumer, log *slog.Logger, m *metrics.Metrics) {
 	lifecycle.Register(lc, log, "pending-references", func(ctx context.Context) {
 		lifecycle.Every(ctx, log, "pending-references", cfg.Pending.PollInterval, func(ctx context.Context) {
 			for ctx.Err() == nil {
@@ -129,9 +149,6 @@ func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.Pend
 				if claimed < cfg.Pending.BatchSize {
 					break
 				}
-			}
-			if n, err := store.CountWaiting(ctx); err == nil {
-				m.PendingReferences.Set(float64(n))
 			}
 		})
 	})
