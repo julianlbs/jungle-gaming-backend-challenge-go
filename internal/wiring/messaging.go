@@ -48,7 +48,6 @@ var Outbox = fx.Module("outbox",
 
 func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxStore, client *sns.Client,
 	log *slog.Logger, m *metrics.Metrics) {
-	log = log.With("worker", "outbox-relay")
 	relay := app.NewOutboxRelay(store, snspublisher.New(client, cfg.SNS.TopicARN), app.RelayConfig{
 		Owner:     cfg.InstanceID + "-" + uuid.NewString()[:8],
 		Lease:     cfg.Outbox.Lease,
@@ -83,7 +82,6 @@ var Pending = fx.Module("pending", fx.Invoke(registerPendingWorker))
 
 func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.PendingResumer, store *postgres.PendingStore,
 	log *slog.Logger, m *metrics.Metrics) {
-	log = log.With("worker", "pending-references")
 	lifecycle.Register(lc, log, "pending-references", func(ctx context.Context) {
 		lifecycle.Every(ctx, log, "pending-references", cfg.Pending.PollInterval, func(ctx context.Context) {
 			for ctx.Err() == nil {
