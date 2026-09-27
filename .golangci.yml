@@ -1,0 +1,27 @@
+version: "2"
+
+run:
+  build-tags:
+    - integration
+    - e2e
+
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+  settings:
+    gosec:
+      excludes:
+        - G115
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
