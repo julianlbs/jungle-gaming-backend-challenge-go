@@ -588,4 +588,9 @@ spans pendentes são enviados no shutdown, depois que API e workers pararam.
 - As três instâncias do compose executam todos os papéis e por isso compartilham um usuário;
   separar papéis por instância pediria usuários e políticas distintos para consumo e publicação.
 - Moedas limitadas a `BRL`, `EUR` e `USD`, todas com duas casas.
-- Não há teste de carga.
+- A vazão da outbox é limitada pela publicação de um evento por vez: no teste de carga, as três
+  instâncias publicaram cerca de 380 eventos/s na LocalStack, então acima de ~190 operações/s o
+  atraso da outbox cresce até a carga baixar. Nenhuma operação é perdida nem espera por isso.
+- Uma carteira muito disputada é serializada pelo lock de linha (~350 operações/s no teste de
+  carga); acima disso as requisições esperam pelo lock e por conexões do pool. Os números e a
+  metodologia estão no [README](README.md#teste-de-carga).

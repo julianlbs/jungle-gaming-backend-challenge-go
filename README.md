@@ -311,6 +311,7 @@ Os endpoints, scopes e códigos de resposta estão documentados em
 | `make vet` | `go vet` com e sem as tags `integration,e2e` | nenhuma |
 | `make fmt-check` | Falha se algum arquivo não estiver formatado com `gofmt -s` | nenhuma |
 | `make lint` | `golangci-lint run ./...` com a versão v2.5.0 fixada, via `go run` (sobrescreva com `GOLANGCI_LINT=golangci-lint`) | nenhuma |
+| `make load-test` | Teste de carga com k6 contra as três instâncias do compose (ver [Teste de carga](#teste-de-carga)) | Docker |
 
 ### Preparar as dependências
 
@@ -373,6 +374,79 @@ A injeção de falhas usa a variável `FAULT_POINT`, lida apenas em binários co
 `pending.after_claim`; ao atingi-los o processo envia `SIGKILL` a si mesmo. Sem a tag, as
 chamadas são no-ops e não existem no binário de produção.
 
+## Teste de carga
+
+```sh
+make load-test                                        # 200 req/s por 60 s
+make load-test LOAD_RATE=1000 LOAD_DRAIN_TIMEOUT_S=600
+```
+
+O alvo sobe o compose (`app-1`..`app-3` e dependências) e roda o script
+[`test/load/wager.js`](test/load/wager.js) no k6 (`grafana/k6:1.3.0`, em container com
+`--network host`). Parâmetros, todos variáveis do `make`:
+
+| Variável | Padrão | Significado |
+| --- | --- | --- |
+| `LOAD_RATE` | `200` | Requisições por segundo (taxa de chegada constante) |
+| `LOAD_DURATION` | `60s` | Duração da fase de carga |
+| `LOAD_WALLETS` | `200` | Carteiras abertas no setup, além da carteira "quente" |
+| `LOAD_HOT_SHARE` | `0.1` | Fração das apostas enviadas à carteira quente |
+| `LOAD_REPLAY_SHARE` | `0.05` | Fração de reenvios idênticos (mesma chave e corpo) da requisição anterior |
+| `LOAD_DRAIN_TIMEOUT_S` | `120` | Prazo para a outbox esvaziar depois da carga |
+
+**Metodologia.** O setup obtém tokens no Keycloak por client credentials, abre as carteiras com
+saldo de 1.000.000,00 BRL e lê as métricas das três instâncias como linha de base. Na fase de
+carga, um executor `constant-arrival-rate` envia `BET` de 0,01 BRL com chaves únicas,
+alternando as três instâncias; os replays vão, em geral, para uma instância diferente da original.
+Em paralelo, um VU lê `/metrics` de cada instância a cada segundo e registra
+`outbox_pending_events` e `outbox_oldest_pending_age_seconds` (atraso da outbox). Terminada a
+carga, a fase de drenagem mede quanto tempo a outbox leva para zerar, calcula a diferença de
+`wallet_concurrency_conflicts_total` e `db_transaction_retries_total` em relação à linha de base
+e reconcilia a carteira quente e mais 20 carteiras.
+
+Respostas `200` (inclusive replays) e `422` são esperadas; qualquer outro status (`409`, `503`,
+`5xx`) conta como erro. O teste falha se os erros passarem de 1%, se o k6 não conseguir manter a
+taxa (`dropped_iterations > 0`), se a outbox não esvaziar no prazo ou se alguma reconciliação
+divergir. As taxas "/s" do resumo do k6 dividem pelo tempo total, incluindo a drenagem; a vazão
+da tabela abaixo é o número de requisições dividido pela duração da carga. Cada evento publicado
+também chega à fila `wallet-events-audit.fifo`; para esvaziá-la depois:
+
+```sh
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1 \
+aws --endpoint-url http://localhost:4566 sqs purge-queue \
+  --queue-url http://localhost:4566/000000000000/wallet-events-audit.fifo
+```
+
+**Ambiente das medições.** Um único host: AMD Ryzen 5 5500 (6 núcleos, 12 threads), 16 GB de
+RAM, Linux 6.8, Docker 27.3.1. Três instâncias, PostgreSQL, LocalStack, Keycloak e o k6
+disputam a mesma máquina, com a configuração padrão do compose (`DB_MAX_CONNS=20` por
+instância, `OUTBOX_BATCH_SIZE=50`). Volumes recriados (`make down`) antes da primeira execução.
+
+| Cenário | Vazão | p50 | p95 | p99 | Erros | Conflitos (servidor) | Backlog máx. da outbox | Atraso máx. da outbox | Drenagem |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Padrão: 200 req/s, 60 s, 10% na carteira quente | 200 req/s (11.408 processadas, 593 replays) | 4,2 ms | 71,5 ms | 140 ms | 0 | 0 conflitos, 0 retries | 2.224 eventos | 6,0 s | 5,6 s |
+| 1000 req/s, 60 s, 10% na carteira quente | 1000 req/s (57.061 processadas, 2.940 replays) | 4,6 ms | 11,5 ms | 265 ms | 0 | 0 conflitos, 0 retries | 99.639 eventos | 52,4 s | 4 min 1 s |
+| Só carteira quente: 500 req/s pedidos, 30 s | ≈350 req/s (10.491 atendidas; 4.510 não enviadas por falta de VUs) | 1,96 s | 7,39 s | 7,80 s | 0 | 0 conflitos, 0 retries | 13.251 eventos | 24,1 s | 48,5 s |
+
+Todas as reconciliações ficaram consistentes e nenhuma requisição recebeu `409` ou `503`.
+
+**Leitura dos resultados.**
+
+- A API absorveu 1000 req/s sem erros e com p95 de 11,5 ms; o p99 sobe para centenas de
+  milissegundos com a máquina saturada. A execução padrão foi a primeira depois de recriar os
+  volumes e teve p95 maior; uma execução anterior de 20 s a 200 req/s, com o ambiente já em uso,
+  ficou em p95 de 7,3 ms e p99 de 11,7 ms.
+- O gargalo é a outbox: cada operação gera dois eventos e o relay publica um por vez no SNS; as
+  três instâncias juntas publicaram cerca de 380 eventos/s na LocalStack. Acima de ~190
+  operações/s o backlog cresce e é drenado depois, sem perda: nenhuma operação espera pela
+  publicação. Publicar em lote (`PublishBatch`, até 10 mensagens) ou em paralelo por grupo seria
+  o próximo passo se o atraso importasse.
+- A carteira quente é serializada pelo `SELECT ... FOR UPDATE` e atende ~350 req/s. Acima
+  disso as requisições esperam na fila do lock e do pool de conexões, a latência chega a
+  segundos e o k6 não consegue manter a taxa (o cenário falha o limite `dropped_iterations`, como
+  esperado). Não houve conflitos de concorrência: com `DB_LOCK_TIMEOUT=2s`, as esperas no lock
+  ficaram abaixo do timeout e a espera mais longa aconteceu na aquisição de conexão.
+
 ## Estrutura do repositório
 
 ```text
@@ -390,4 +464,5 @@ internal/wiring/            módulos Fx por papel
 migrations/                 schema versionado
 deploy/                     init do PostgreSQL, realm do Keycloak, provisionamento AWS
 test/integration/, test/e2e/
+test/load/                  script k6 do teste de carga
 ```
