@@ -1,0 +1,118 @@
+package config
+
+import (
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+)
+
+func env(overrides map[string]string) func(string) (string, bool) {
+	base := map[string]string{
+		"DATABASE_URL":          "postgres://wallet_app:x@localhost:5432/wallet",
+		"OIDC_ISSUER":           "http://localhost:8080/realms/wallet",
+		"OIDC_JWKS_URL":         "http://keycloak:8080/realms/wallet/protocol/openid-connect/certs",
+		"OIDC_AUDIENCE":         "wallet-api",
+		"SQS_WAGER_QUEUE_URL":   "http://localstack:4566/000000000000/wager-transactions.fifo",
+		"SQS_WAGER_DLQ_URL":     "http://localstack:4566/000000000000/wager-transactions-dlq.fifo",
+		"SQS_ALLOWED_PROVIDERS": "provider-a, provider-b,provider-a",
+		"SNS_EVENTS_TOPIC_ARN":  "arn:aws:sns:us-east-1:000000000000:wallet-events.fifo",
+	}
+	for k, v := range overrides {
+		if v == "<unset>" {
+			delete(base, k)
+			continue
+		}
+		base[k] = v
+	}
+	return func(k string) (string, bool) {
+		v, ok := base[k]
+		return v, ok
+	}
+}
+
+func TestLoadDefaults(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range allRoles {
+		if !cfg.Roles.Has(role) {
+			t.Errorf("default roles miss %s", role)
+		}
+	}
+	if cfg.HTTPAddr != ":8080" || cfg.MetricsAddr != ":9090" || cfg.LogLevel != slog.LevelInfo {
+		t.Errorf("addresses/level: %+v", cfg)
+	}
+	if cfg.Postgres.MaxConns != 20 || cfg.Postgres.LockTimeout != 2*time.Second {
+		t.Errorf("postgres: %+v", cfg.Postgres)
+	}
+	if strings.Join(cfg.SQS.AllowedProviders, ",") != "provider-a,provider-b" {
+		t.Errorf("allowed providers: %v", cfg.SQS.AllowedProviders)
+	}
+	if cfg.Pending.TTL != 30*time.Minute || cfg.Pending.MaxAttempts != 10 || cfg.InstanceID == "" {
+		t.Errorf("pending/instance: %+v %q", cfg.Pending, cfg.InstanceID)
+	}
+}
+
+func TestRoleScopedRequirements(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"APP_ROLES":            "pending",
+		"OIDC_ISSUER":          "<unset>",
+		"SQS_WAGER_QUEUE_URL":  "<unset>",
+		"SNS_EVENTS_TOPIC_ARN": "<unset>",
+	}))
+	if err != nil {
+		t.Fatalf("pending-only process should not need api, sqs or sns settings: %v", err)
+	}
+	if cfg.Roles.Has(RoleAPI) || !cfg.Roles.Has(RolePending) {
+		t.Fatalf("roles = %v", cfg.Roles)
+	}
+}
+
+func TestLoadReportsEveryProblem(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"APP_ROLES":            "api,billing",
+		"DATABASE_URL":         "<unset>",
+		"DB_MAX_CONNS":         "0",
+		"DB_LOCK_TIMEOUT":      "soon",
+		"LOG_LEVEL":            "loud",
+		"OIDC_JWKS_URL":        "keycloak/certs",
+		"SNS_EVENTS_TOPIC_ARN": "wallet-events",
+		"PENDING_BACKOFF_BASE": "10m",
+		"PENDING_BACKOFF_MAX":  "1m",
+	}))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{
+		`APP_ROLES has unknown role "billing"`,
+		"DATABASE_URL is required",
+		"DB_MAX_CONNS must be an integer",
+		"DB_LOCK_TIMEOUT must be a duration",
+		"LOG_LEVEL must be",
+		"OIDC_JWKS_URL must be an absolute URL",
+		"PENDING_BACKOFF_MAX must not be lower",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "SNS_EVENTS_TOPIC_ARN") {
+		t.Error("outbox settings validated although the outbox role is disabled")
+	}
+}
+
+func TestConsumerNeedsAllowedProviders(t *testing.T) {
+	_, err := Load(env(map[string]string{"APP_ROLES": "consumer", "SQS_ALLOWED_PROVIDERS": " , "}))
+	if err == nil || !strings.Contains(err.Error(), "SQS_ALLOWED_PROVIDERS") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEmptyRolesRejected(t *testing.T) {
+	_, err := Load(env(map[string]string{"APP_ROLES": ","}))
+	if err == nil || !strings.Contains(err.Error(), "at least one role") {
+		t.Fatalf("err = %v", err)
+	}
+}
