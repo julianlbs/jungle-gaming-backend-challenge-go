@@ -59,9 +59,7 @@ func (a *API) submitWager(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := logging.With(r.Context(),
-		logging.KeyProviderID, req.ProviderID,
-		"externalTransactionId", req.ExternalTransactionID)
+	ctx := logging.With(r.Context(), "externalTransactionId", req.ExternalTransactionID)
 	out, err := a.Wagers.Process(ctx, app.WagerCommand{
 		Channel:                        wagering.ChannelHTTP,
 		ProviderID:                     req.ProviderID,

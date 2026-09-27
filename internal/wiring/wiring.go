@@ -24,7 +24,12 @@ import (
 
 // Options returns the full application for an already validated configuration.
 func Options(cfg config.Config) fx.Option {
+	var roles []fx.Option
+	if cfg.Roles.Has(config.RoleAPI) {
+		roles = append(roles, API)
+	}
 	return fx.Options(
+		fx.Options(roles...),
 		fx.Supply(cfg),
 		fx.StopTimeout(cfg.ShutdownTimeout),
 		fx.WithLogger(func(log *slog.Logger) fxevent.Logger {
