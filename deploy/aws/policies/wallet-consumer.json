@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConsumeWagerTransactions",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+      ],
+      "Resource": "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions.fifo"
+    },
+    {
+      "Sid": "DeadLetterInvalidMessages",
+      "Effect": "Allow",
+      "Action": ["sqs:SendMessage", "sqs:GetQueueAttributes"],
+      "Resource": "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions-dlq.fifo"
+    },
+    {
+      "Sid": "PublishWalletEvents",
+      "Effect": "Allow",
+      "Action": ["sns:Publish", "sns:GetTopicAttributes"],
+      "Resource": "arn:aws:sns:${REGION}:${ACCOUNT_ID}:wallet-events.fifo"
+    }
+  ]
+}
