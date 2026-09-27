@@ -28,6 +28,9 @@ func Options(cfg config.Config) fx.Option {
 	if cfg.Roles.Has(config.RoleAPI) {
 		roles = append(roles, API)
 	}
+	if cfg.Roles.Has(config.RoleConsumer) {
+		roles = append(roles, AWS, Consumer)
+	}
 	return fx.Options(
 		fx.Options(roles...),
 		fx.Supply(cfg),
