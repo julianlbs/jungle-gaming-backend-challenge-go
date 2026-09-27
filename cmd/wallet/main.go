@@ -14,7 +14,8 @@ const usage = `usage:
   wallet serve                run the roles listed in APP_ROLES
   wallet migrate up           apply all pending migrations
   wallet migrate down <n|all> revert the last n migrations, or all of them
-  wallet migrate version      print the current schema version`
+  wallet migrate version      print the current schema version
+  wallet health               exit 0 when the local instance is ready`
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -30,6 +31,8 @@ func run(args []string) int {
 		return serve()
 	case "migrate":
 		return runMigrate(args[1:])
+	case "health":
+		return runHealth()
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
