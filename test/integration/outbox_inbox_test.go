@@ -185,3 +185,40 @@ func TestInboxDuplicateAndRace(t *testing.T) {
 		t.Fatal("inbox delete was allowed")
 	}
 }
+
+func TestOutboxPurgeKeepsUnpublishedAndRecentEvents(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	store := postgres.NewOutboxStore(db.App)
+
+	var ids []uuid.UUID
+	for range 3 {
+		id := uuid.New()
+		ids = append(ids, id)
+		if err := store.Insert(ctx, event.Outgoing{
+			EventID: id, EventType: event.TypeWalletBalanceChanged, EventVersion: 1,
+			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(), PartitionKey: "w-1",
+			CorrelationID: "corr", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range ids[:2] {
+		if _, err := store.MarkPublished(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if n, err := store.PurgePublished(ctx, time.Now().Add(-time.Hour), 10); err != nil || n != 0 {
+		t.Fatalf("recent events purged: %d %v", n, err)
+	}
+	if n, err := store.PurgePublished(ctx, time.Now().Add(time.Minute), 1); err != nil || n != 1 {
+		t.Fatalf("limited purge: %d %v", n, err)
+	}
+	if n, err := store.PurgePublished(ctx, time.Now().Add(time.Minute), 10); err != nil || n != 1 {
+		t.Fatalf("second purge: %d %v", n, err)
+	}
+	if n := countRows(t, db, `SELECT count(*) FROM outbox_events WHERE published_at IS NULL`); n != 1 {
+		t.Fatalf("unpublished events = %d", n)
+	}
+}

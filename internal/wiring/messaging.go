@@ -43,7 +43,7 @@ var Consumer = fx.Module("consumer",
 
 var Outbox = fx.Module("outbox",
 	fx.Provide(func(cfg aws.Config) *sns.Client { return sns.NewFromConfig(cfg) }),
-	fx.Invoke(registerRelay),
+	fx.Invoke(registerRelay, registerOutboxPurge),
 )
 
 func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxStore, client *sns.Client,
@@ -52,6 +52,8 @@ func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxSto
 		Owner:     cfg.InstanceID + "-" + uuid.NewString()[:8],
 		Lease:     cfg.Outbox.Lease,
 		BatchSize: cfg.Outbox.BatchSize,
+		BaseDelay: cfg.Outbox.BackoffBase,
+		MaxDelay:  cfg.Outbox.BackoffMax,
 	}, func(res app.RelayResult, ev app.ClaimedEvent, err error) {
 		m.OutboxPublish.WithLabelValues(string(res)).Inc()
 		if res != app.RelayPublished {
@@ -76,6 +78,35 @@ func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxSto
 			log.Info("released outbox leases", "count", n)
 		}
 	})
+}
+
+const outboxPurgeBatch = 1000
+
+func registerOutboxPurge(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxStore, log *slog.Logger) {
+	if cfg.Outbox.Retention <= 0 {
+		return
+	}
+	lifecycle.Register(lc, log, "outbox-purge", func(ctx context.Context) {
+		lifecycle.Every(ctx, log, "outbox-purge", time.Minute, func(ctx context.Context) {
+			if n, err := purgeOutbox(ctx, store, time.Now().Add(-cfg.Outbox.Retention)); err != nil && ctx.Err() == nil {
+				log.Warn("purging published outbox events failed", "error", err)
+			} else if n > 0 {
+				log.Info("purged published outbox events", "count", n)
+			}
+		})
+	})
+}
+
+func purgeOutbox(ctx context.Context, store *postgres.OutboxStore, before time.Time) (int64, error) {
+	var total int64
+	for ctx.Err() == nil {
+		n, err := store.PurgePublished(ctx, before, outboxPurgeBatch)
+		total += n
+		if err != nil || n < outboxPurgeBatch {
+			return total, err
+		}
+	}
+	return total, ctx.Err()
 }
 
 var Pending = fx.Module("pending", fx.Invoke(registerPendingWorker))

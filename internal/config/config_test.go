@@ -53,6 +53,23 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Pending.TTL != 30*time.Minute || cfg.Pending.MaxAttempts != 10 || cfg.InstanceID == "" {
 		t.Errorf("pending/instance: %+v %q", cfg.Pending, cfg.InstanceID)
 	}
+	if cfg.Outbox.BackoffBase != time.Second || cfg.Outbox.BackoffMax != 5*time.Minute || cfg.Outbox.Retention != 0 {
+		t.Errorf("outbox: %+v", cfg.Outbox)
+	}
+}
+
+func TestOutboxRetention(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"OUTBOX_RETENTION": "168h", "OUTBOX_BACKOFF_BASE": "200ms", "OUTBOX_BACKOFF_MAX": "2s"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Outbox.Retention != 168*time.Hour || cfg.Outbox.BackoffBase != 200*time.Millisecond || cfg.Outbox.BackoffMax != 2*time.Second {
+		t.Fatalf("outbox: %+v", cfg.Outbox)
+	}
+	if _, err := Load(env(map[string]string{"OUTBOX_RETENTION": "1s"})); err == nil ||
+		!strings.Contains(err.Error(), "OUTBOX_RETENTION must be a duration") {
+		t.Fatalf("short retention accepted: %v", err)
+	}
 }
 
 func TestRoleScopedRequirements(t *testing.T) {
@@ -81,6 +98,8 @@ func TestLoadReportsEveryProblem(t *testing.T) {
 		"SNS_EVENTS_TOPIC_ARN": "wallet-events",
 		"PENDING_BACKOFF_BASE": "10m",
 		"PENDING_BACKOFF_MAX":  "1m",
+		"OUTBOX_BACKOFF_BASE":  "10m",
+		"OUTBOX_BACKOFF_MAX":   "1m",
 	}))
 	if err == nil {
 		t.Fatal("expected an error")
@@ -93,6 +112,7 @@ func TestLoadReportsEveryProblem(t *testing.T) {
 		"LOG_LEVEL must be",
 		"OIDC_JWKS_URL must be an absolute URL",
 		"PENDING_BACKOFF_MAX must not be lower",
+		"OUTBOX_BACKOFF_MAX must not be lower",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q:\n%v", want, err)

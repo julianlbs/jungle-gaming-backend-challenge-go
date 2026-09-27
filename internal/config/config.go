@@ -80,6 +80,10 @@ type Outbox struct {
 	BatchSize    int
 	Lease        time.Duration
 	PollInterval time.Duration
+	BackoffBase  time.Duration
+	BackoffMax   time.Duration
+	// Retention is how long published events are kept; zero keeps them forever.
+	Retention time.Duration
 }
 
 type Pending struct {
@@ -122,6 +126,9 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			BatchSize:    r.integer("OUTBOX_BATCH_SIZE", "50", 1, 1000),
 			Lease:        r.duration("OUTBOX_LEASE", "30s", time.Second, time.Hour),
 			PollInterval: r.duration("OUTBOX_POLL_INTERVAL", "250ms", 10*time.Millisecond, time.Minute),
+			BackoffBase:  r.duration("OUTBOX_BACKOFF_BASE", "1s", time.Millisecond, time.Hour),
+			BackoffMax:   r.duration("OUTBOX_BACKOFF_MAX", "5m", time.Millisecond, 24*time.Hour),
+			Retention:    r.optionalDuration("OUTBOX_RETENTION", time.Hour, 365*24*time.Hour),
 		},
 		Pending: Pending{
 			PollInterval: r.duration("PENDING_POLL_INTERVAL", "500ms", 10*time.Millisecond, time.Minute),
@@ -158,6 +165,9 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		if arn := cfg.SNS.TopicARN; arn != "" && !strings.HasPrefix(arn, "arn:") {
 			r.fail("SNS_EVENTS_TOPIC_ARN", "must be an ARN")
 		}
+	}
+	if cfg.Outbox.BackoffMax < cfg.Outbox.BackoffBase {
+		r.fail("OUTBOX_BACKOFF_MAX", "must not be lower than OUTBOX_BACKOFF_BASE")
 	}
 	if cfg.Pending.BackoffMax < cfg.Pending.BackoffBase {
 		r.fail("PENDING_BACKOFF_MAX", "must not be lower than PENDING_BACKOFF_BASE")
@@ -239,6 +249,14 @@ func (r *reader) duration(key, fallback string, lo, hi time.Duration) time.Durat
 		return lo
 	}
 	return d
+}
+
+// optionalDuration returns zero when key is unset or "0".
+func (r *reader) optionalDuration(key string, lo, hi time.Duration) time.Duration {
+	if raw := r.str(key, "0"); raw == "0" {
+		return 0
+	}
+	return r.duration(key, "0", lo, hi)
 }
 
 func (r *reader) level(key, fallback string) slog.Level {
