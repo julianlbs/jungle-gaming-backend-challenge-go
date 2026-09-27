@@ -351,8 +351,10 @@ dentro do prazo ou falha e volta para a fila.
   `traceparent`, também imutável, guarda o contexto de trace da operação que gerou o evento.
 - O relay (`app.OutboxRelay`) reivindica lotes com `UPDATE ... WHERE id IN (SELECT ... FOR
   UPDATE SKIP LOCKED)` em ordem de `seq`, gravando `locked_by` e `next_attempt_at = now() +
-  OUTBOX_LEASE`. Os relógios usados são os do banco, então todas as instâncias concordam sobre a
-  expiração.
+  OUTBOX_LEASE`. Um evento não entra no lote enquanto existir outro da mesma `partition_key`
+  com `seq` menor e `published_at` nulo: um evento anterior em lease ou em backoff segura a
+  partição. O SNS FIFO ordena pela ordem de `Publish`, não pelo `seq`. Os relógios usados são
+  os do banco, então todas as instâncias concordam sobre a expiração.
 - Publicado com sucesso: `published_at = now()` condicionado a `published_at IS NULL`; se outro
   publisher confirmou antes, o resultado é `lease_lost` e nada muda.
 - Falha na publicação: reagenda com backoff exponencial (`OUTBOX_BACKOFF_BASE` até

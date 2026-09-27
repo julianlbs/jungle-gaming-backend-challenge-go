@@ -49,6 +49,9 @@ func (s *OutboxStore) Insert(ctx context.Context, events ...event.Outgoing) erro
 }
 
 // Claim leases up to limit due events to owner for the lease duration.
+// A later event stays unclaimed while an earlier unpublished event of the same
+// partition_key exists. SNS FIFO orders by publish time, so that earlier event
+// has to hold the partition until it is published.
 func (s *OutboxStore) Claim(ctx context.Context, owner string, lease time.Duration, limit int) ([]app.ClaimedEvent, error) {
 	rows, err := s.db.Query(ctx,
 		`UPDATE outbox_events o
@@ -56,11 +59,19 @@ func (s *OutboxStore) Claim(ctx context.Context, owner string, lease time.Durati
 		        locked_by = $1,
 		        next_attempt_at = now() + make_interval(secs => $2)
 		  WHERE o.id IN (
-		        SELECT id FROM outbox_events
-		         WHERE published_at IS NULL AND next_attempt_at <= now()
-		         ORDER BY seq
+		        SELECT candidate.id
+		          FROM outbox_events candidate
+		         WHERE candidate.published_at IS NULL
+		           AND candidate.next_attempt_at <= now()
+		           AND NOT EXISTS (
+		                 SELECT 1
+		                   FROM outbox_events earlier
+		                  WHERE earlier.partition_key = candidate.partition_key
+		                    AND earlier.published_at IS NULL
+		                    AND earlier.seq < candidate.seq)
+		         ORDER BY candidate.seq
 		         LIMIT $3
-		         FOR UPDATE SKIP LOCKED)
+		           FOR UPDATE OF candidate SKIP LOCKED)
 		 RETURNING o.id, o.partition_key, o.event_type, o.event_version, o.correlation_id,
 		           o.payload::text, o.attempts, COALESCE(o.traceparent, ''), o.seq`,
 		owner, lease.Seconds(), limit,

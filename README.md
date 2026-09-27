@@ -359,7 +359,7 @@ Rodam contra PostgreSQL, Keycloak e LocalStack reais. Cada teste recebe um banco
 clonado de um template migrado. Cobrem migrations (subida e reversão), constraints e triggers de
 proteção do ledger, repositórios, casos de uso (abertura, cinco tipos de operação, reversões,
 pendências, consultas), concorrência na mesma carteira (duas apostas de 80.00 sobre 100.00:
-uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00 e um único débito no ledger), inbox, outbox concorrente (e o contexto de trace gravado com cada evento), API HTTP,
+uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00 e um único débito no ledger), inbox, outbox concorrente (cada evento uma vez e, na mesma partição, em ordem de `seq`; o contexto de trace vai gravado com cada evento), API HTTP,
 SQS/SNS com DLQ, readiness e o ciclo de vida Fx.
 
 A autenticação é coberta de duas formas. `TestKeycloakCredentials` obtém tokens reais do

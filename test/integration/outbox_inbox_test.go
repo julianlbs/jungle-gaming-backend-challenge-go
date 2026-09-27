@@ -29,12 +29,13 @@ func TestOutboxLeaseLifecycle(t *testing.T) {
 	payload := []byte(`{"z":1, "a":{"amount":"10.00","currency":"BRL"}}`)
 	ids := map[uuid.UUID]bool{}
 	var events []event.Outgoing
-	for range 3 {
+	keys := []string{"w-1", "w-2", "w-3"}
+	for i := range 3 {
 		id := uuid.New()
 		ids[id] = true
 		events = append(events, event.Outgoing{
 			EventID: id, EventType: event.TypeWalletBalanceChanged, EventVersion: 1,
-			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(), PartitionKey: "w-1",
+			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(), PartitionKey: keys[i],
 			CorrelationID: "corr", OccurredAt: time.Now().UTC(), Payload: payload,
 		})
 	}
@@ -238,8 +239,8 @@ func TestOutboxKeepsTraceContext(t *testing.T) {
 	for id, ctx := range map[uuid.UUID]context.Context{withTrace: traced, withoutTrace: context.Background()} {
 		if err := store.Insert(ctx, event.Outgoing{
 			EventID: id, EventType: event.TypeWalletBalanceChanged, EventVersion: 1,
-			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(), PartitionKey: "w-1",
-			CorrelationID: "corr", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`),
+			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(),
+			PartitionKey: id.String(), CorrelationID: "corr", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -259,5 +260,55 @@ func TestOutboxKeepsTraceContext(t *testing.T) {
 	_, err = db.App.Exec(context.Background(), `UPDATE outbox_events SET traceparent = NULL WHERE id = $1`, withTrace)
 	if err == nil || !strings.Contains(err.Error(), "content is immutable") {
 		t.Fatalf("traceparent rewritten: %v", err)
+	}
+}
+
+func TestOutboxClaimHoldsPartitionForEarlierEvent(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	store := postgres.NewOutboxStore(db.App)
+
+	ids := make([]uuid.UUID, 3)
+	for i := range ids {
+		ids[i] = uuid.New()
+		if err := store.Insert(ctx, event.Outgoing{
+			EventID: ids[i], EventType: event.TypeWalletBalanceChanged, EventVersion: 1,
+			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(), PartitionKey: "same-wallet",
+			CorrelationID: "corr", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	claim := func(owner string) []uuid.UUID {
+		t.Helper()
+		batch, err := store.Claim(ctx, owner, time.Minute, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []uuid.UUID
+		for _, c := range batch {
+			got = append(got, c.ID)
+		}
+		return got
+	}
+
+	if got := claim("relay-a"); len(got) != 1 || got[0] != ids[0] {
+		t.Fatalf("first claim = %v, want %s", got, ids[0])
+	}
+	if got := claim("relay-b"); len(got) != 0 {
+		t.Fatalf("later event claimed while an earlier one is leased: %v", got)
+	}
+	if ok, err := store.MarkPublished(ctx, ids[0]); err != nil || !ok {
+		t.Fatal(err)
+	}
+	if got := claim("relay-b"); len(got) != 1 || got[0] != ids[1] {
+		t.Fatalf("second claim = %v, want %s", got, ids[1])
+	}
+	if err := store.Reschedule(ctx, ids[1], "relay-b", time.Hour, errors.New("sns down")); err != nil {
+		t.Fatal(err)
+	}
+	if got := claim("relay-c"); len(got) != 0 {
+		t.Fatalf("later event claimed while an earlier one is waiting to retry: %v", got)
 	}
 }
