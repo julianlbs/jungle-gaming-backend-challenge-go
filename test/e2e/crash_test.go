@@ -120,13 +120,38 @@ func TestPendingWorkerCrashAfterClaimIsResumedAfterLease(t *testing.T) {
 	app := c.start("app", nil)
 	c.sendWager(w, "msg-late", "bet-late", "BET", "5.00", "")
 	c.waitSettled(30 * time.Second)
-	if got := c.balance(w.id); got != "100.00" {
-		t.Fatalf("balance = %s, want the late bet refunded", got)
-	}
 	if n := c.count(`SELECT count(*) FROM wager_transactions WHERE external_transaction_id = 'refund-1' AND status = 'PROCESSED'`); n != 1 {
 		t.Fatal("refund not resumed after the crashed claim")
 	}
+	c.assertBetRefunded(w, "bet-late", 500, "100.00")
 	c.assertLedgerConsistency(app)
+}
+
+func TestWaitingRefundSurvivesKillingEveryInstance(t *testing.T) {
+	c := newCluster(t)
+	apps := c.threeInstances()
+	w := c.openWallet(apps[0], "100.00")
+	r, err := c.wager(apps[1], w, "refund-1", "REFUND", "20.00", "bet-late")
+	if err != nil || r.status != http.StatusAccepted || r.body["status"] != "PENDING_REFERENCE" {
+		t.Fatalf("early refund: %v %d %v", err, r.status, r.body)
+	}
+	refund := r.body["transactionId"].(string)
+	for _, a := range apps {
+		a.Kill()
+	}
+
+	restarted := []*instance{c.start("app-4", nil), c.start("app-5", nil)}
+	// Over SQS the killed consumers' in-flight long polls can hide the bet for longer than the
+	// short pending budget of the test cluster.
+	if r, err := c.wager(restarted[0], w, "bet-late", "BET", "20.00", ""); err != nil || r.status != http.StatusOK {
+		t.Fatalf("late bet: %v %d %v", err, r.status, r.body)
+	}
+	c.waitSettled(60 * time.Second)
+	if status, code := c.transactionStatus(restarted[1], refund); status != "PROCESSED" {
+		t.Fatalf("refund %s %s", status, code)
+	}
+	c.assertBetRefunded(w, "bet-late", 2000, "100.00")
+	c.assertLedgerConsistency(restarted[0])
 }
 
 func TestAcceptedOperationsSurviveGracefulStopUnderLoad(t *testing.T) {

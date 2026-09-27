@@ -18,6 +18,29 @@ func (c *cluster) transactionStatus(i *instance, id string) (string, string) {
 	return r.body["status"].(string), code
 }
 
+// assertBetRefunded checks that the bet was processed and that, besides the opening, the wallet
+// moved by exactly one debit and one credit of the bet amount and is back at the opening balance.
+func (c *cluster) assertBetRefunded(w walletRef, betExternalID string, amountMinor int64, opening string) {
+	c.t.Helper()
+	if n := c.count(`SELECT count(*) FROM wager_transactions WHERE wallet_id = $1 AND external_transaction_id = $2
+		AND kind = 'BET' AND status = 'PROCESSED'`, w.id, betExternalID); n != 1 {
+		c.t.Fatalf("processed bets %s = %d", betExternalID, n)
+	}
+	movements := `SELECT count(*) FROM wallet_ledger_entries e JOIN wager_transactions t ON t.id = e.transaction_id
+		WHERE e.wallet_id = $1 AND t.kind <> 'OPENING'`
+	if n := c.count(movements, w.id); n != 2 {
+		c.t.Fatalf("ledger movements besides the opening = %d, want 2", n)
+	}
+	for _, direction := range []string{"DEBIT", "CREDIT"} {
+		if n := c.count(movements+` AND e.direction = $2 AND e.amount_minor = $3`, w.id, direction, amountMinor); n != 1 {
+			c.t.Fatalf("%s entries of %d = %d, want 1", direction, amountMinor, n)
+		}
+	}
+	if got := c.balance(w.id); got != opening {
+		c.t.Fatalf("balance = %s, want %s", got, opening)
+	}
+}
+
 func TestSameOperationOverHTTPAndSQSHasOneEffect(t *testing.T) {
 	c := newCluster(t)
 	apps := []*instance{c.start("app-1", nil), c.start("app-2", nil)}
@@ -65,9 +88,7 @@ func TestRefundBeforeBetIsProcessedOnceTheBetArrives(t *testing.T) {
 		status, _ := c.transactionStatus(apps[1], refund)
 		return status == "PROCESSED"
 	})
-	if got := c.balance(w.id); got != "100.00" {
-		t.Fatalf("balance = %s, want 100.00", got)
-	}
+	c.assertBetRefunded(w, "bet-1", 4000, "100.00")
 	c.assertLedgerConsistency(apps[1])
 }
 
