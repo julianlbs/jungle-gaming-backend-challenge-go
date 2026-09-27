@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/metrics"
 )
 
@@ -139,6 +140,63 @@ func TestTransientFailureKeepsGroupOrder(t *testing.T) {
 	}
 	if v, ok := api.visibility["m2"]; !ok || v != 0 {
 		t.Fatalf("m2 was not released: %v", api.visibility)
+	}
+	if api.visibility["m1"] != 2 {
+		t.Fatalf("m1 backoff = %d", api.visibility["m1"])
+	}
+}
+
+func TestRetryDelay(t *testing.T) {
+	for n, want := range map[int]int{0: 2, 1: 2, 2: 4, 5: 32, 8: 256, 9: 300, 50: 300} {
+		if got := int(retryDelay(n).Seconds()); got != want {
+			t.Errorf("retryDelay(%d) = %d, want %d", n, got, want)
+		}
+	}
+}
+
+func TestPermanentFailuresAreDeadLettered(t *testing.T) {
+	cases := map[string]struct {
+		msg    types.Message
+		err    error
+		reason string
+	}{
+		"invalid":           {types.Message{MessageId: aws.String("x"), ReceiptHandle: aws.String("m1"), Body: aws.String("{")}, nil, "INVALID_MESSAGE"},
+		"provider":          {message(t, "m1", "provider-z", "1"), nil, "PROVIDER_NOT_ALLOWED"},
+		"reserved":          {message(t, "m1", "provider-a", "1"), wagering.ErrReservedKind, "VALIDATION_ERROR"},
+		"field":             {message(t, "m1", "provider-a", "1"), &wagering.FieldError{Field: "amount", Reason: "bad"}, "VALIDATION_ERROR"},
+		"wallet":            {message(t, "m1", "provider-a", "1"), app.ErrWalletNotFound, "WALLET_NOT_FOUND"},
+		"key reused":        {message(t, "m1", "provider-a", "1"), app.ErrIdempotencyKeyReused, "IDEMPOTENCY_KEY_REUSED"},
+		"external conflict": {message(t, "m1", "provider-a", "1"), app.ErrExternalTransactionConflict, "EXTERNAL_TRANSACTION_CONFLICT"},
+		"message conflict":  {message(t, "m1", "provider-a", "1"), app.ErrMessageConflict, "MESSAGE_CONFLICT"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			api := newFakeSQS()
+			c := newTestConsumer(api, &fakeHandler{results: map[string]error{"m1": tc.err}})
+			if !c.handle(context.Background(), tc.msg) {
+				t.Fatal("message should be settled")
+			}
+			if len(api.sent) != 1 || len(api.deleted) != 1 {
+				t.Fatalf("sent = %d, deleted = %v", len(api.sent), api.deleted)
+			}
+			in := api.sent[0]
+			if aws.ToString(in.QueueUrl) != "dlq" || aws.ToString(in.MessageAttributes["failureReason"].StringValue) != tc.reason ||
+				aws.ToString(in.MessageDeduplicationId) != aws.ToString(tc.msg.MessageId) || aws.ToString(in.MessageGroupId) == "" {
+				t.Fatalf("dlq message = %+v", in)
+			}
+		})
+	}
+}
+
+func TestDeadLetterFailureLeavesMessageForRedrive(t *testing.T) {
+	api := newFakeSQS()
+	api.sendErr = errors.New("dlq down")
+	c := newTestConsumer(api, &fakeHandler{results: map[string]error{"m1": app.ErrWalletNotFound}})
+	if c.handle(context.Background(), message(t, "m1", "provider-a", "3")) {
+		t.Fatal("message should stay in the queue")
+	}
+	if len(api.deleted) != 0 || api.visibility["m1"] != 8 {
+		t.Fatalf("deleted = %v, visibility = %v", api.deleted, api.visibility)
 	}
 }
 

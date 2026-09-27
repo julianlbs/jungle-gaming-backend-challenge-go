@@ -156,13 +156,6 @@ func (c *Consumer) handle(parent context.Context, msg types.Message) bool {
 
 var errProviderNotAllowed = errors.New("provider not allowed on this queue")
 
-// fail leaves the message for redelivery; the visibility timeout paces the retries.
-func (c *Consumer) fail(ctx context.Context, msg types.Message, err error) bool {
-	c.log.WarnContext(ctx, "message not handled", "error", err, "receiveCount", receiveCount(msg))
-	c.metrics.SQSMessages.WithLabelValues("RETRY").Inc()
-	return false
-}
-
 func (c *Consumer) delete(ctx context.Context, msg types.Message) {
 	if _, err := c.sqs.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl: aws.String(c.cfg.QueueURL), ReceiptHandle: msg.ReceiptHandle,
