@@ -75,6 +75,23 @@ aws iam attach-user-policy --user-name provider-a-producer \
 aws iam attach-user-policy --user-name provider-b-producer \
   --policy-arn "arn:aws:iam::${account_id}:policy/provider-producer"
 
+# Each run rotates the keys, so the credentials file always matches IAM.
+credentials_file="${CREDENTIALS_FILE:-/credentials/credentials}"
+mkdir -p "$(dirname "$credentials_file")"
+tmp_credentials="${credentials_file}.tmp"
+: > "$tmp_credentials"
+for user in wallet-consumer provider-a-producer provider-b-producer; do
+  for key in $(aws iam list-access-keys --user-name "$user" --query 'AccessKeyMetadata[].AccessKeyId' --output text); do
+    aws iam delete-access-key --user-name "$user" --access-key-id "$key"
+  done
+  read -r key_id secret < <(aws iam create-access-key --user-name "$user" \
+    --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+  printf '[%s]\naws_access_key_id = %s\naws_secret_access_key = %s\n\n' "$user" "$key_id" "$secret" >> "$tmp_credentials"
+done
+chmod 0644 "$tmp_credentials"
+mv "$tmp_credentials" "$credentials_file"
+
+echo "credentials:  ${credentials_file}"
 echo "wager queue:  ${wager_url}"
 echo "wager dlq:    ${dlq_url}"
 echo "events topic: ${topic_arn}"

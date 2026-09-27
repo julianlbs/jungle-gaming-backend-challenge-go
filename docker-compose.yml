@@ -8,6 +8,8 @@ x-app: &app
     - path: .env.example
     - path: .env
       required: false
+  volumes:
+    - aws-credentials:/aws:ro
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -87,6 +89,7 @@ services:
       AWS_ENDPOINT_URL: http://localstack:4566
     volumes:
       - ./deploy/aws:/init:ro
+      - aws-credentials:/credentials
     depends_on:
       localstack:
         condition: service_healthy
@@ -127,3 +130,4 @@ services:
 
 volumes:
   pgdata:
+  aws-credentials:
