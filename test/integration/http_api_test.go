@@ -175,7 +175,8 @@ func TestHTTPWalletAndWagerFlow(t *testing.T) {
 
 	r = f.do(t, http.MethodPost, "/wagering/transactions", providerA, key, bet)
 	expectStatus(t, r, http.StatusOK, "")
-	if r.body["idempotentReplay"] != true || r.body["transactionId"] != txID {
+	if r.body["idempotentReplay"] != true || r.body["transactionId"] != txID ||
+		r.body["balance"].(map[string]any)["amount"] != "75.00" {
 		t.Fatalf("replay body = %v", r.body)
 	}
 

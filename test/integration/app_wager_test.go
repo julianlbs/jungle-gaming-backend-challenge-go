@@ -110,6 +110,100 @@ func TestWagerBetReplayAndConflicts(t *testing.T) {
 	}
 }
 
+func TestReplayReturnsTheOriginalBalance(t *testing.T) {
+	f := newAppFixture(t)
+	ctx := context.Background()
+	w := f.openWallet(t, "100.00")
+
+	first := wager(w, "BET", "30.00", "bet-1")
+	out, err := f.processor.Process(ctx, first)
+	requireOutcome(t, out, err, wagering.StatusProcessed, "70.00", false)
+	second, err := f.processor.Process(ctx, wager(w, "BET", "10.00", "bet-2"))
+	requireOutcome(t, second, err, wagering.StatusProcessed, "60.00", false)
+
+	replay, err := f.processor.Process(ctx, first)
+	requireOutcome(t, replay, err, wagering.StatusProcessed, "70.00", true)
+	if replay.Transaction.ID() != out.Transaction.ID() {
+		t.Fatal("replay returned a different transaction")
+	}
+	var minor int64
+	if err := f.db.App.QueryRow(ctx, `SELECT balance_minor FROM wallets WHERE id = $1`, w.ID().UUID()).Scan(&minor); err != nil || minor != 6000 {
+		t.Fatalf("stored balance = %d %v, want 6000", minor, err)
+	}
+}
+
+func (f *appFixture) walletState(t *testing.T, w *wallet.Wallet) (ledger int, version int64) {
+	t.Helper()
+	err := f.db.App.QueryRow(context.Background(), `SELECT
+		(SELECT count(*) FROM wallet_ledger_entries WHERE wallet_id = $1), (SELECT version FROM wallets WHERE id = $1)`,
+		w.ID().UUID()).Scan(&ledger, &version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger, version
+}
+
+func eventsFor(t *testing.T, f *appFixture, eventType string, id wagering.ID) int {
+	t.Helper()
+	return countRows(t, f.db, `SELECT count(*) FROM outbox_events WHERE event_type = $1
+		AND (aggregate_id::text = $2 OR payload->'data'->>'transactionId' = $2)`, eventType, id.String())
+}
+
+func TestLossWritesNoLedgerAndNoBalanceEvent(t *testing.T) {
+	f := newAppFixture(t)
+	ctx := context.Background()
+	w := f.openWallet(t, "100.00")
+
+	ledgerBefore, versionBefore := f.walletState(t, w)
+	bet, err := f.processor.Process(ctx, wager(w, "BET", "10.00", "bet-1"))
+	requireOutcome(t, bet, err, wagering.StatusProcessed, "90.00", false)
+	if n := eventsFor(t, f, "WagerTransactionProcessed", bet.Transaction.ID()); n != 1 {
+		t.Fatalf("bet processed events = %d", n)
+	}
+	if n := eventsFor(t, f, "WalletBalanceChanged", bet.Transaction.ID()); n != 1 {
+		t.Fatalf("bet balance events = %d", n)
+	}
+	var (
+		direction                   string
+		amount, balBefore, balAfter int64
+		entryVersion, walletVersion int64
+	)
+	if err := f.db.App.QueryRow(ctx, `SELECT e.direction, e.amount_minor, e.balance_before_minor, e.balance_after_minor, e.wallet_version, w.version
+		FROM wallet_ledger_entries e JOIN wallets w ON w.id = e.wallet_id WHERE e.transaction_id = $1`,
+		bet.Transaction.ID().UUID()).Scan(&direction, &amount, &balBefore, &balAfter, &entryVersion, &walletVersion); err != nil {
+		t.Fatal(err)
+	}
+	if direction != "DEBIT" || amount != 1000 || balBefore != 10000 || balAfter != 9000 ||
+		entryVersion != versionBefore+1 || walletVersion != versionBefore+1 {
+		t.Fatalf("bet entry = %s %d %d->%d v%d (wallet v%d, before v%d)", direction, amount, balBefore, balAfter, entryVersion, walletVersion, versionBefore)
+	}
+	if n := countRows(t, f.db, `SELECT count(*) FROM outbox_events WHERE event_type = 'WalletBalanceChanged'
+		AND payload->'data'->>'transactionId' = $1 AND payload->'data'->>'direction' = 'DEBIT'
+		AND payload->'data'->'balanceBefore'->>'amount' = '100.00' AND payload->'data'->'balanceAfter'->>'amount' = '90.00'`,
+		bet.Transaction.ID().String()); n != 1 {
+		t.Fatal("bet balance event does not describe the debit")
+	}
+	if ledger, _ := f.walletState(t, w); ledger != ledgerBefore+1 {
+		t.Fatalf("ledger entries after bet = %d, want %d", ledger, ledgerBefore+1)
+	}
+
+	ledgerBefore, versionBefore = f.walletState(t, w)
+	loss, err := f.processor.Process(ctx, wager(w, "LOSS", "0", "loss-1"))
+	requireOutcome(t, loss, err, wagering.StatusProcessed, "90.00", false)
+	if ledger, version := f.walletState(t, w); ledger != ledgerBefore || version != versionBefore {
+		t.Fatalf("loss moved the wallet: ledger %d->%d version %d->%d", ledgerBefore, ledger, versionBefore, version)
+	}
+	if n := eventsFor(t, f, "WagerTransactionProcessed", loss.Transaction.ID()); n != 1 {
+		t.Fatalf("loss processed events = %d", n)
+	}
+	if n := eventsFor(t, f, "WalletBalanceChanged", loss.Transaction.ID()); n != 0 {
+		t.Fatalf("loss balance events = %d", n)
+	}
+	if got := f.balance(t, w); got != "90.00" {
+		t.Fatalf("balance = %s", got)
+	}
+}
+
 func TestConcurrentBetsNeverOverdraw(t *testing.T) {
 	f := newAppFixture(t)
 	ctx := context.Background()
