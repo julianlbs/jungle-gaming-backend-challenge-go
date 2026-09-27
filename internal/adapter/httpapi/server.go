@@ -30,12 +30,13 @@ type QueryService interface {
 }
 
 type Deps struct {
-	Log      *slog.Logger
-	Metrics  *metrics.Metrics
-	Verifier TokenVerifier
-	Wallets  WalletOpener
-	Wagers   WagerService
-	Queries  QueryService
+	Log       *slog.Logger
+	Metrics   *metrics.Metrics
+	Verifier  TokenVerifier
+	Wallets   WalletOpener
+	Wagers    WagerService
+	Queries   QueryService
+	Readiness *Readiness
 }
 
 // API holds the dependencies shared by the handlers.
@@ -52,6 +53,7 @@ func NewAPI(d Deps) *API {
 	})
 	a.registerWalletRoutes()
 	a.registerWageringRoutes()
+	a.registerHealthRoutes()
 	return a
 }
 
