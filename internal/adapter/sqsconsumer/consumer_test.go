@@ -16,6 +16,7 @@ import (
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/metrics"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 type fakeSQS struct {
@@ -222,5 +223,28 @@ func TestGroupByMessageGroupKeepsOrder(t *testing.T) {
 	groups := groupByMessageGroup([]types.Message{mk("1", "a"), mk("2", "b"), mk("3", "a")})
 	if len(groups) != 2 || aws.ToString(groups[0][1].MessageId) != "3" || aws.ToString(groups[1][0].MessageId) != "2" {
 		t.Fatalf("groups = %v", groups)
+	}
+}
+
+type traceRecorder struct{ traceParent string }
+
+func (h *traceRecorder) Handle(ctx context.Context, _ app.IncomingWager) (app.IntakeResult, error) {
+	h.traceParent = tracing.Inject(ctx)["traceparent"]
+	return app.IntakeResult{Entry: app.InboxEntry{Outcome: app.InboxProcessed, TransactionID: uuid.New()}}, nil
+}
+
+func TestHandlerContinuesProducerTrace(t *testing.T) {
+	if _, err := tracing.Setup(context.Background(), tracing.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	msg := message(t, "m1", "provider-a", "1")
+	msg.MessageAttributes = map[string]types.MessageAttributeValue{
+		"traceparent": {DataType: aws.String("String"), StringValue: aws.String(tp)},
+	}
+	h := &traceRecorder{}
+	newTestConsumer(newFakeSQS(), h).handleGroup(context.Background(), []types.Message{msg})
+	if h.traceParent != tp {
+		t.Fatalf("handler trace context = %q", h.traceParent)
 	}
 }

@@ -5,7 +5,10 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
@@ -66,8 +69,10 @@ func (a *API) public(pattern string, h http.HandlerFunc) {
 	a.mux.HandleFunc(pattern, h)
 }
 
+// Handler continues a W3C trace context sent by the caller. Health probes are not traced.
 func (a *API) Handler() http.Handler {
-	return observe(a.log, a.Metrics, a.mux)
+	return otelhttp.NewHandler(observe(a.log, a.Metrics, a.mux), "http.request",
+		otelhttp.WithFilter(func(r *http.Request) bool { return !strings.HasPrefix(r.URL.Path, "/health/") }))
 }
 
 func NewServer(addr string, h http.Handler) *http.Server {

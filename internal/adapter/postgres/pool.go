@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -15,6 +16,7 @@ type PoolConfig struct {
 	MinConns          int32
 	MaxConnLifetime   time.Duration
 	HealthCheckPeriod time.Duration
+	Tracer            pgx.QueryTracer
 }
 
 func NewPool(ctx context.Context, cfg PoolConfig) (*pgxpool.Pool, error) {
@@ -33,6 +35,9 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*pgxpool.Pool, error) {
 	}
 	if cfg.HealthCheckPeriod > 0 {
 		pc.HealthCheckPeriod = cfg.HealthCheckPeriod
+	}
+	if cfg.Tracer != nil {
+		pc.ConnConfig.Tracer = cfg.Tracer
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {

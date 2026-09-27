@@ -11,6 +11,7 @@ import (
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/event"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 const maxLastErrorLen = 1000
@@ -25,7 +26,9 @@ func NewOutboxStore(db DBTX) *OutboxStore {
 	return &OutboxStore{db: db}
 }
 
+// Insert stores the caller's trace context with each event so that the relay can continue it.
 func (s *OutboxStore) Insert(ctx context.Context, events ...event.Outgoing) error {
+	traceParent := tracing.Inject(ctx)["traceparent"]
 	for _, e := range events {
 		aggregateID, err := uuid.Parse(e.AggregateID)
 		if err != nil {
@@ -33,10 +36,10 @@ func (s *OutboxStore) Insert(ctx context.Context, events ...event.Outgoing) erro
 		}
 		_, err = s.db.Exec(ctx,
 			`INSERT INTO outbox_events (id, aggregate_type, aggregate_id, partition_key, event_type,
-				event_version, correlation_id, causation_id, payload, occurred_at, next_attempt_at, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())`,
+				event_version, correlation_id, causation_id, payload, occurred_at, traceparent, next_attempt_at, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())`,
 			e.EventID, e.AggregateType, aggregateID, e.PartitionKey, e.EventType, e.EventVersion,
-			e.CorrelationID, nullString(e.CausationID), string(e.Payload), e.OccurredAt,
+			e.CorrelationID, nullString(e.CausationID), string(e.Payload), e.OccurredAt, nullString(traceParent),
 		)
 		if err != nil {
 			return fmt.Errorf("insert outbox event %s: %w", e.EventID, err)
@@ -59,7 +62,7 @@ func (s *OutboxStore) Claim(ctx context.Context, owner string, lease time.Durati
 		         LIMIT $3
 		         FOR UPDATE SKIP LOCKED)
 		 RETURNING o.id, o.partition_key, o.event_type, o.event_version, o.correlation_id,
-		           o.payload::text, o.attempts, o.seq`,
+		           o.payload::text, o.attempts, COALESCE(o.traceparent, ''), o.seq`,
 		owner, lease.Seconds(), limit,
 	)
 	if err != nil {
@@ -78,7 +81,7 @@ func (s *OutboxStore) Claim(ctx context.Context, owner string, lease time.Durati
 			payload string
 		)
 		if err := rows.Scan(&c.ID, &c.PartitionKey, &c.EventType, &c.EventVersion, &c.CorrelationID,
-			&payload, &c.Attempts, &c.seq); err != nil {
+			&payload, &c.Attempts, &c.TraceParent, &c.seq); err != nil {
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}
 		c.Payload = []byte(payload)

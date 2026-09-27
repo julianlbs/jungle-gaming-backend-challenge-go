@@ -64,6 +64,8 @@ func (p *WagerProcessor) WithObserver(o WagerObserver) *WagerProcessor {
 // Process handles one operation in its own transaction.
 func (p *WagerProcessor) Process(ctx context.Context, cmd WagerCommand) (WagerOutcome, error) {
 	start := time.Now()
+	ctx, span := tracer.Start(ctx, "wager.process")
+	defer span.End()
 	var out WagerOutcome
 	err := p.uow.Do(ctx, func(ctx context.Context, tx Tx) error {
 		var err error
@@ -71,10 +73,10 @@ func (p *WagerProcessor) Process(ctx context.Context, cmd WagerCommand) (WagerOu
 		return err
 	})
 	if err != nil {
-		p.observe(cmd, WagerOutcome{}, false, err, start)
+		p.observe(ctx, cmd, WagerOutcome{}, false, err, start)
 		return WagerOutcome{}, err
 	}
-	p.observe(cmd, out, false, nil, start)
+	p.observe(ctx, cmd, out, false, nil, start)
 	p.nudge(ctx, out)
 	return out, nil
 }

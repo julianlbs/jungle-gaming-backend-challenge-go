@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
@@ -20,6 +21,7 @@ import (
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/config"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/logging"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/metrics"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 // Options returns the full application for an already validated configuration.
@@ -65,8 +67,22 @@ var Platform = fx.Module("platform",
 		},
 		metrics.New,
 	),
-	fx.Invoke(registerMetricsServer),
+	fx.Invoke(registerTracing, registerMetricsServer),
 )
+
+// registerTracing runs before any traced component is built and flushes spans last on stop.
+func registerTracing(lc fx.Lifecycle, cfg config.Config) error {
+	shutdown, err := tracing.Setup(context.Background(), tracing.Config{
+		InstanceID:  cfg.InstanceID,
+		Endpoint:    cfg.Tracing.Endpoint,
+		SampleRatio: cfg.Tracing.SampleRatio,
+	})
+	if err != nil {
+		return err
+	}
+	lc.Append(fx.Hook{OnStop: shutdown})
+	return nil
+}
 
 var Postgres = fx.Module("postgres",
 	fx.Provide(
@@ -101,6 +117,7 @@ func newPool(lc fx.Lifecycle, cfg config.Config, log *slog.Logger) (*pgxpool.Poo
 	pool, err := postgres.NewPool(context.Background(), postgres.PoolConfig{
 		URL:      cfg.Postgres.URL,
 		MaxConns: cfg.Postgres.MaxConns,
+		Tracer:   otelpgx.NewTracer(),
 	})
 	if err != nil {
 		return nil, err

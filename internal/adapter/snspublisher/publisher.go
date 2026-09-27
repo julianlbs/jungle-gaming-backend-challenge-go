@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns/types"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 type API interface {
@@ -35,6 +36,9 @@ func (p *Publisher) Publish(ctx context.Context, ev app.ClaimedEvent) error {
 	}
 	if ev.CorrelationID != "" {
 		attrs["correlationId"] = types.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String(ev.CorrelationID)}
+	}
+	for k, v := range tracing.Inject(ctx) {
+		attrs[k] = types.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String(v)}
 	}
 	_, err := p.sns.Publish(ctx, &sns.PublishInput{
 		TopicArn:               aws.String(p.topicARN),

@@ -69,7 +69,7 @@ func TestMigrationsUpDownUp(t *testing.T) {
 	if got := tables(); strings.Join(got, ",") != strings.Join(expectedTables, ",") {
 		t.Fatalf("tables after up: %v", got)
 	}
-	if v := version(); v != 5 {
+	if v := version(); v != 6 {
 		t.Fatalf("version after up = %d", v)
 	}
 	run((*postgres.Migrator).Up)
@@ -83,7 +83,7 @@ func TestMigrationsUpDownUp(t *testing.T) {
 	}
 
 	run((*postgres.Migrator).Up)
-	if v := version(); v != 5 {
+	if v := version(); v != 6 {
 		t.Fatalf("version after second up = %d", v)
 	}
 }

@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/adapter/postgres"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/event"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 func TestOutboxLeaseLifecycle(t *testing.T) {
@@ -220,5 +222,42 @@ func TestOutboxPurgeKeepsUnpublishedAndRecentEvents(t *testing.T) {
 	}
 	if n := countRows(t, db, `SELECT count(*) FROM outbox_events WHERE published_at IS NULL`); n != 1 {
 		t.Fatalf("unpublished events = %d", n)
+	}
+}
+
+func TestOutboxKeepsTraceContext(t *testing.T) {
+	if _, err := tracing.Setup(context.Background(), tracing.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	db := newTestDB(t)
+	store := postgres.NewOutboxStore(db.App)
+	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	traced := tracing.Extract(context.Background(), map[string]string{"traceparent": tp})
+
+	withTrace, withoutTrace := uuid.New(), uuid.New()
+	for id, ctx := range map[uuid.UUID]context.Context{withTrace: traced, withoutTrace: context.Background()} {
+		if err := store.Insert(ctx, event.Outgoing{
+			EventID: id, EventType: event.TypeWalletBalanceChanged, EventVersion: 1,
+			AggregateType: event.AggregateWallet, AggregateID: uuid.NewString(), PartitionKey: "w-1",
+			CorrelationID: "corr", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batch, err := store.Claim(context.Background(), "owner", time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]string{}
+	for _, c := range batch {
+		got[c.ID] = c.TraceParent
+	}
+	if len(got) != 2 || got[withTrace] != tp || got[withoutTrace] != "" {
+		t.Fatalf("trace contexts = %v", got)
+	}
+
+	_, err = db.App.Exec(context.Background(), `UPDATE outbox_events SET traceparent = NULL WHERE id = $1`, withTrace)
+	if err == nil || !strings.Contains(err.Error(), "content is immutable") {
+		t.Fatalf("traceparent rewritten: %v", err)
 	}
 }

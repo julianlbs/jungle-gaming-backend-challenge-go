@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/adapter/auth"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/logging"
@@ -77,6 +79,13 @@ func observe(log *slog.Logger, m *metrics.Metrics, next http.Handler) http.Handl
 			if route == "" {
 				route = "unmatched"
 			}
+			span := trace.SpanFromContext(r.Context())
+			if strings.HasPrefix(route, r.Method+" ") {
+				span.SetName(route)
+			} else {
+				span.SetName(r.Method + " " + route)
+			}
+			span.SetAttributes(attribute.String("http.route", route))
 			elapsed := time.Since(start)
 			m.HTTPRequests.WithLabelValues(r.Method, route, strconv.Itoa(rec.status)).Observe(elapsed.Seconds())
 			log.InfoContext(r.Context(), "http request",

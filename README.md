@@ -29,7 +29,7 @@ Os detalhes estão em [ARCHITECTURE.md](ARCHITECTURE.md#garantias-e-como-são-ob
 - Go 1.25 (a versão exata está em `go.mod` e no `Dockerfile`), para rodar testes e comandos locais.
 - `curl` e `jq` para os exemplos abaixo; AWS CLI é opcional (para enviar mensagens SQS do host).
 - Portas livres: `5432` (PostgreSQL), `8080` (Keycloak), `4566` (LocalStack), `8081`-`8083` (API)
-  e `9091`-`9093` (métricas).
+  e `9091`-`9093` (métricas); com o perfil `tracing`, também `16686` e `4318` (Jaeger).
 
 ## Início rápido
 
@@ -126,6 +126,8 @@ processo sai com código 2.
 | `PENDING_BACKOFF_MAX` | `5m` | Atraso máximo entre tentativas |
 | `PENDING_MAX_ATTEMPTS` | `10` | Tentativas antes de rejeitar com `REFERENCE_NOT_FOUND` |
 | `PENDING_REFERENCE_TTL` | `30m` | Prazo máximo de espera pela referência |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | URL base de um coletor OTLP/HTTP (ex.: `http://jaeger:4318`); vazio desliga a exportação de spans |
+| `OTEL_TRACES_SAMPLER_ARG` | `1` | Fração de traces iniciados pelo serviço que são amostrados (0 a 1); traces recebidos respeitam a decisão do chamador |
 
 ## Filas, tópico e IdP
 
@@ -281,6 +283,20 @@ curl -s $API/health/ready
 curl -s http://localhost:9091/metrics | grep -E '^(wager_|wallet_|sqs_|outbox_|pending_|inbox_|db_)'
 ```
 
+## Tracing
+
+Os spans são exportados por OTLP/HTTP quando `OTEL_EXPORTER_OTLP_ENDPOINT` está definido. O
+compose tem um Jaeger no perfil `tracing`:
+
+```sh
+echo 'OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318' >> .env
+docker compose --profile tracing up --build -d
+```
+
+A interface do Jaeger fica em http://localhost:16686 (serviço `jungle-wallet`). Uma chamada com
+cabeçalho `traceparent` continua o trace do chamador; o `traceId` também aparece nos logs JSON.
+Os detalhes estão em [ARCHITECTURE.md](ARCHITECTURE.md#observabilidade).
+
 Os endpoints, scopes e códigos de resposta estão documentados em
 [ARCHITECTURE.md](ARCHITECTURE.md#contrato-http).
 
@@ -324,7 +340,7 @@ Rodam contra PostgreSQL, Keycloak e LocalStack reais. Cada teste recebe um banco
 clonado de um template migrado. Cobrem migrations (subida e reversão), constraints e triggers de
 proteção do ledger, repositórios, casos de uso (abertura, cinco tipos de operação, reversões,
 pendências, consultas), concorrência na mesma carteira (duas apostas de 80.00 sobre 100.00:
-uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00 e um único débito no ledger), inbox, outbox concorrente, API HTTP,
+uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00 e um único débito no ledger), inbox, outbox concorrente (e o contexto de trace gravado com cada evento), API HTTP,
 SQS/SNS com DLQ, readiness e o ciclo de vida Fx.
 
 A autenticação é coberta de duas formas. `TestKeycloakCredentials` obtém tokens reais do
@@ -368,7 +384,7 @@ internal/adapter/auth/      verificação de tokens OIDC
 internal/adapter/postgres/  unit of work, repositórios, outbox, pendências, migrator
 internal/adapter/sqsconsumer/  consumidor SQS FIFO e DLQ
 internal/adapter/snspublisher/ publicação no SNS FIFO
-internal/platform/          logging, métricas, lifecycle de workers, injeção de falhas
+internal/platform/          logging, métricas, tracing, lifecycle de workers, injeção de falhas
 internal/config/            carga e validação do ambiente
 internal/wiring/            módulos Fx por papel
 migrations/                 schema versionado

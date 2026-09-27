@@ -12,10 +12,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/logging"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/metrics"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 const ConsumerName = "wager-transactions"
@@ -71,9 +76,10 @@ func (c *Consumer) Run(ctx context.Context) {
 	failures := 0
 	for ctx.Err() == nil {
 		out, err := c.sqs.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl:            aws.String(c.cfg.QueueURL),
-			MaxNumberOfMessages: 10,
-			WaitTimeSeconds:     int32(c.cfg.WaitTime / time.Second),
+			QueueUrl:              aws.String(c.cfg.QueueURL),
+			MaxNumberOfMessages:   10,
+			WaitTimeSeconds:       int32(c.cfg.WaitTime / time.Second),
+			MessageAttributeNames: traceAttributes,
 			MessageSystemAttributeNames: []types.MessageSystemAttributeName{
 				types.MessageSystemAttributeNameApproximateReceiveCount,
 				types.MessageSystemAttributeNameMessageGroupId,
@@ -122,9 +128,18 @@ func (c *Consumer) handleGroup(ctx context.Context, group []types.Message) {
 }
 
 // handle returns false when the message stays in the queue for another attempt.
-func (c *Consumer) handle(parent context.Context, msg types.Message) bool {
+func (c *Consumer) handle(parent context.Context, msg types.Message) (done bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), c.cfg.MessageTimeout)
 	defer cancel()
+	ctx, span := tracer.Start(tracing.Extract(ctx, traceCarrier(msg)), "sqs.process "+ConsumerName,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(attribute.String("messaging.system", "aws_sqs"), attribute.Int("sqs.receive_count", receiveCount(msg))))
+	defer func() {
+		if !done {
+			span.SetStatus(codes.Error, "left for redelivery")
+		}
+		span.End()
+	}()
 	ctx = logging.With(ctx, logging.KeyMessageID, aws.ToString(msg.MessageId))
 
 	env, cmd, err := decode(aws.ToString(msg.Body))
@@ -182,6 +197,21 @@ func (c *Consumer) setVisibility(msgs []types.Message, timeout time.Duration) {
 			c.log.Warn("change visibility failed", "error", err, logging.KeyMessageID, aws.ToString(m.MessageId))
 		}
 	}
+}
+
+var (
+	tracer          = otel.Tracer("github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/adapter/sqsconsumer")
+	traceAttributes = []string{"traceparent", "tracestate"}
+)
+
+func traceCarrier(m types.Message) map[string]string {
+	carrier := map[string]string{}
+	for _, k := range traceAttributes {
+		if v, ok := m.MessageAttributes[k]; ok && v.StringValue != nil {
+			carrier[k] = *v.StringValue
+		}
+	}
+	return carrier
 }
 
 func groupByMessageGroup(msgs []types.Message) [][]types.Message {

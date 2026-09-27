@@ -43,6 +43,7 @@ type Config struct {
 	SNS      SNS
 	Outbox   Outbox
 	Pending  Pending
+	Tracing  Tracing
 }
 
 type Postgres struct {
@@ -84,6 +85,12 @@ type Outbox struct {
 	BackoffMax   time.Duration
 	// Retention is how long published events are kept; zero keeps them forever.
 	Retention time.Duration
+}
+
+type Tracing struct {
+	// Endpoint is the OTLP/HTTP collector base URL; empty disables span export.
+	Endpoint    string
+	SampleRatio float64
 }
 
 type Pending struct {
@@ -138,6 +145,10 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			BackoffMax:   r.duration("PENDING_BACKOFF_MAX", "5m", time.Millisecond, 24*time.Hour),
 			MaxAttempts:  r.positive("PENDING_MAX_ATTEMPTS", "10", 10000),
 			TTL:          r.duration("PENDING_REFERENCE_TTL", "30m", 100*time.Millisecond, 7*24*time.Hour),
+		},
+		Tracing: Tracing{
+			Endpoint:    strings.TrimSuffix(r.optionalURL("OTEL_EXPORTER_OTLP_ENDPOINT"), "/"),
+			SampleRatio: r.ratio("OTEL_TRACES_SAMPLER_ARG", "1"),
 		},
 	}
 
@@ -257,6 +268,15 @@ func (r *reader) optionalDuration(key string, lo, hi time.Duration) time.Duratio
 		return 0
 	}
 	return r.duration(key, "0", lo, hi)
+}
+
+func (r *reader) ratio(key, fallback string) float64 {
+	f, err := strconv.ParseFloat(r.str(key, fallback), 64)
+	if err != nil || f < 0 || f > 1 {
+		r.fail(key, "must be a number between 0 and 1")
+		return 1
+	}
+	return f
 }
 
 func (r *reader) level(key, fallback string) slog.Level {

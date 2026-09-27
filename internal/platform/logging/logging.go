@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ctxKey struct{}
@@ -20,6 +22,7 @@ const (
 	KeyWalletID      = "walletId"
 	KeyProviderID    = "providerId"
 	KeyInstanceID    = "instanceId"
+	KeyTraceID       = "traceId"
 )
 
 // New returns a JSON logger that also emits the attributes stored in each record's context.
@@ -60,6 +63,9 @@ type contextHandler struct {
 func (h contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	if attrs, ok := ctx.Value(ctxKey{}).([]slog.Attr); ok {
 		r.AddAttrs(attrs...)
+	}
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		r.AddAttrs(slog.String(KeyTraceID, sc.TraceID().String()))
 	}
 	return h.Handler.Handle(ctx, r)
 }

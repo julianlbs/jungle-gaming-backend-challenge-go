@@ -12,6 +12,12 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/adapter/auth"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
@@ -168,5 +174,28 @@ func TestDecodeJSON(t *testing.T) {
 				t.Fatalf("problem = %+v", p)
 			}
 		})
+	}
+}
+
+func TestRequestSpanContinuesCallerTrace(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	a := NewAPI(Deps{Log: discardLog, Metrics: metrics.New(), Verifier: fakeVerifier{}, Readiness: NewReadiness()})
+	h := a.Handler()
+
+	req := httptest.NewRequest("GET", "/wallets/abc", nil)
+	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/health/live", nil))
+
+	spans := rec.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("spans = %d, health probes must not be traced", len(spans))
+	}
+	s := spans[0]
+	if s.Name() != "GET /wallets/{walletId}" || s.SpanKind() != trace.SpanKindServer ||
+		s.SpanContext().TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("span = %s %v %s", s.Name(), s.SpanKind(), s.SpanContext().TraceID())
 	}
 }

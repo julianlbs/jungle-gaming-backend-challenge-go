@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wallet"
 )
@@ -78,12 +80,17 @@ func (r *PendingResumer) RunOnce(ctx context.Context, lease time.Duration, batch
 	return results, errors.Join(errs...)
 }
 
-func (r *PendingResumer) Resume(ctx context.Context, c PendingClaim) (ResumeResult, error) {
+func (r *PendingResumer) Resume(ctx context.Context, c PendingClaim) (res ResumeResult, err error) {
+	ctx, span := tracer.Start(ctx, "pending.resume")
+	defer func() {
+		span.SetAttributes(attribute.String("pending.result", res.String()))
+		endSpan(span, err)
+	}()
 	var (
 		result  ResumeResult
 		settled *wagering.Transaction
 	)
-	err := r.uow.Do(ctx, func(ctx context.Context, tx Tx) error {
+	err = r.uow.Do(ctx, func(ctx context.Context, tx Tx) error {
 		result, settled = ResumeSkipped, nil
 		// Lock order matches the processor: wallet first, then the transaction.
 		w, err := tx.Wallets().GetForUpdate(ctx, c.WalletID)

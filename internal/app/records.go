@@ -35,4 +35,6 @@ type ClaimedEvent struct {
 	CorrelationID string
 	Payload       []byte
 	Attempts      int
+	// TraceParent is the W3C trace context of the transaction that wrote the event, if any.
+	TraceParent string
 }

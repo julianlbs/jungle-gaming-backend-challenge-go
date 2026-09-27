@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/tracing"
 )
 
 type fakeSNS struct{ in *sns.PublishInput }
@@ -42,5 +43,23 @@ func TestPublishMapsRoutingContract(t *testing.T) {
 	_ = New(api, "arn:topic").Publish(context.Background(), ev)
 	if _, ok := api.in.MessageAttributes["correlationId"]; ok {
 		t.Fatal("empty correlation id must not be sent")
+	}
+	if _, ok := api.in.MessageAttributes["traceparent"]; ok {
+		t.Fatal("traceparent sent without a trace")
+	}
+}
+
+func TestPublishPropagatesTraceContext(t *testing.T) {
+	if _, err := tracing.Setup(context.Background(), tracing.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	ctx := tracing.Extract(context.Background(), map[string]string{"traceparent": tp})
+	api := &fakeSNS{}
+	if err := New(api, "arn:topic").Publish(ctx, app.ClaimedEvent{ID: uuid.New(), PartitionKey: "w", EventType: "T", EventVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := aws.ToString(api.in.MessageAttributes["traceparent"].StringValue); got != tp {
+		t.Fatalf("traceparent attribute = %q", got)
 	}
 }

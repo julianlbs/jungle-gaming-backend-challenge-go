@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
 )
@@ -40,11 +43,12 @@ type WagerObservation struct {
 
 type WagerObserver func(WagerObservation)
 
-func (p *WagerProcessor) observe(cmd WagerCommand, out WagerOutcome, duplicate bool, err error, start time.Time) {
-	if p.observer == nil {
-		return
+func (p *WagerProcessor) observe(ctx context.Context, cmd WagerCommand, out WagerOutcome, duplicate bool, err error, start time.Time) {
+	o := observation(cmd, out, duplicate, err, time.Since(start))
+	annotateWagerSpan(trace.SpanFromContext(ctx), o, err)
+	if p.observer != nil {
+		p.observer(o)
 	}
-	p.observer(observation(cmd, out, duplicate, err, time.Since(start)))
 }
 
 func observation(cmd WagerCommand, out WagerOutcome, duplicate bool, err error, d time.Duration) WagerObservation {

@@ -152,7 +152,7 @@ que mata o processo com `SIGKILL` exatamente ali. O terceiro ponto testado,
 | `wallet_ledger_entries` | `UNIQUE (wallet_id, transaction_id)` e `(wallet_id, wallet_version)`, aritmética `after = before ± amount`, append-only por trigger, encadeamento (cada lançamento parte do saldo do anterior; o primeiro parte de zero) |
 | `wallets` × ledger | Constraint trigger `DEFERRABLE INITIALLY DEFERRED`: no commit, todo saldo com versão > 1 (ou saldo > 0) precisa de um lançamento com a mesma versão e o mesmo saldo final |
 | `inbox_messages` | PK `(consumer_name, message_id)`, append-only |
-| `outbox_events` | Conteúdo imutável, evento publicado não volta a não publicado, evento não publicado não pode ser apagado |
+| `outbox_events` | Conteúdo imutável (inclusive `traceparent`, com formato W3C verificado), evento publicado não volta a não publicado, evento não publicado não pode ser apagado |
 
 ## Concorrência
 
@@ -340,7 +340,8 @@ dentro do prazo ou falha e volta para a fila.
 ## Transactional outbox
 
 - Os eventos são gravados em `outbox_events` na mesma transação da operação. O payload é um
-  snapshot imutável, em coluna `JSON` (não `JSONB`) para ser republicado byte a byte.
+  snapshot imutável, em coluna `JSON` (não `JSONB`) para ser republicado byte a byte. A coluna
+  `traceparent`, também imutável, guarda o contexto de trace da operação que gerou o evento.
 - O relay (`app.OutboxRelay`) reivindica lotes com `UPDATE ... WHERE id IN (SELECT ... FOR
   UPDATE SKIP LOCKED)` em ordem de `seq`, gravando `locked_by` e `next_attempt_at = now() +
   OUTBOX_LEASE`. Os relógios usados são os do banco, então todas as instâncias concordam sobre a
@@ -548,6 +549,32 @@ identificadores. `wallet_concurrency_conflicts_total` conta cada falha por lock 
 serialização ou deadlock, inclusive a última tentativa, e cada verificação de versão perdida.
 O atraso da outbox é observado por `outbox_oldest_pending_age_seconds`.
 
+- **Tracing** com OpenTelemetry, contexto propagado no formato W3C (`traceparent`):
+
+| Span | Origem | Tipo |
+| --- | --- | --- |
+| `<método> <rota>` (ex.: `POST /wagering/transactions`) | `otelhttp`, nomeado pela rota do mux; `/health/*` não gera span | server |
+| `sqs.process wager-transactions` | consumidor, continuando o `traceparent` dos atributos da mensagem SQS | consumer |
+| `wager.process`, `wager.intake`, `wallet.open`, `pending.resume` | casos de uso | internal |
+| `BEGIN`, `SELECT`, `UPDATE`, `pool.acquire`... | `otelpgx`, sem parâmetros das consultas | client |
+| `outbox.publish` | relay, filho do contexto gravado na coluna `traceparent` | producer |
+
+O relay publica em outro momento e, muitas vezes, em outra instância; por isso o contexto da
+transação é gravado junto com o evento, e o span `outbox.publish` continua o mesmo trace da
+requisição ou mensagem que o originou. A publicação no SNS leva o `traceparent` como atributo da
+mensagem, então os assinantes podem continuar o trace.
+
+Os atributos dos spans de caso de uso são os mesmos labels fechados das métricas (`wager.channel`,
+`wager.kind`, `wager.status`, `wager.replay`); valores e identificadores não viram atributos. Os
+logs incluem `traceId` quando há um trace ativo.
+
+Sem `OTEL_EXPORTER_OTLP_ENDPOINT` o provider é no-op: nada é gravado nem exportado, mas o
+contexto recebido ainda é repassado ao SNS. Com o endpoint, a amostragem é `ParentBased` com
+razão `OTEL_TRACES_SAMPLER_ARG` para traces novos, e spans `client` sem pai (as consultas de
+polling dos workers fora de qualquer operação) são descartados para não gerar um trace a cada
+varredura. A exportação é assíncrona em lote; uma falha do coletor não afeta as operações, e os
+spans pendentes são enviados no shutdown, depois que API e workers pararam.
+
 ## Limitações e trabalho não concluído
 
 - A LocalStack Community não aplica políticas IAM. A aplicação se autentica com a chave do
@@ -557,4 +584,4 @@ O atraso da outbox é observado por `outbox_oldest_pending_age_seconds`.
 - As três instâncias do compose executam todos os papéis e por isso compartilham um usuário;
   separar papéis por instância pediria usuários e políticas distintos para consumo e publicação.
 - Moedas limitadas a `BRL`, `EUR` e `USD`, todas com duas casas.
-- Não há tracing distribuído nem teste de carga.
+- Não há teste de carga.

@@ -79,6 +79,13 @@ services:
       timeout: 3s
       retries: 40
 
+  jaeger:
+    image: jaegertracing/jaeger:2.9.0
+    profiles: ["tracing"]
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
   aws-init:
     image: amazon/aws-cli:2.17.0
     entrypoint: ["/bin/bash", "/init/init-aws.sh"]

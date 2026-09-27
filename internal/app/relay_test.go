@@ -7,6 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type fakeOutbox struct {
@@ -85,5 +90,35 @@ func TestRelayBackoffIsCapped(t *testing.T) {
 	}
 	if d := r.Backoff(1); d < time.Second || d > 1200*time.Millisecond {
 		t.Fatalf("Backoff(1) = %v", d)
+	}
+}
+
+type contextPublisher struct{ ctx context.Context }
+
+func (p *contextPublisher) Publish(ctx context.Context, _ ClaimedEvent) error {
+	p.ctx = ctx
+	return nil
+}
+
+func TestRelayContinuesStoredTrace(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	ev := ClaimedEvent{ID: uuid.New(), EventType: "WalletBalanceChanged", Attempts: 1,
+		TraceParent: "00-" + traceID + "-00f067aa0ba902b7-01"}
+	pub := &contextPublisher{}
+	q := &fakeOutbox{batch: []ClaimedEvent{ev}, rescheduled: map[uuid.UUID]time.Duration{}, markResult: true}
+	if _, err := NewOutboxRelay(q, pub, RelayConfig{Owner: "a"}, nil).RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := trace.SpanContextFromContext(pub.ctx).TraceID().String(); got != traceID {
+		t.Fatalf("publisher trace = %s", got)
+	}
+	spans := rec.Ended()
+	if len(spans) != 1 || spans[0].Name() != "outbox.publish" || spans[0].SpanKind() != trace.SpanKindProducer ||
+		spans[0].Parent().SpanID().String() != "00f067aa0ba902b7" {
+		t.Fatalf("spans = %+v", spans)
 	}
 }

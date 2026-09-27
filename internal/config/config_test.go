@@ -72,6 +72,28 @@ func TestOutboxRetention(t *testing.T) {
 	}
 }
 
+func TestTracing(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tracing.Endpoint != "" || cfg.Tracing.SampleRatio != 1 {
+		t.Fatalf("tracing defaults: %+v", cfg.Tracing)
+	}
+	cfg, err = Load(env(map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4318/", "OTEL_TRACES_SAMPLER_ARG": "0.25"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tracing.Endpoint != "http://jaeger:4318" || cfg.Tracing.SampleRatio != 0.25 {
+		t.Fatalf("tracing: %+v", cfg.Tracing)
+	}
+	_, err = Load(env(map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger", "OTEL_TRACES_SAMPLER_ARG": "2"}))
+	if err == nil || !strings.Contains(err.Error(), "OTEL_EXPORTER_OTLP_ENDPOINT must be an absolute URL") ||
+		!strings.Contains(err.Error(), "OTEL_TRACES_SAMPLER_ARG must be a number between 0 and 1") {
+		t.Fatalf("invalid tracing accepted: %v", err)
+	}
+}
+
 func TestRoleScopedRequirements(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
 		"APP_ROLES":            "pending",

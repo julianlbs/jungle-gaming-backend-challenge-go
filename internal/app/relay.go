@@ -6,6 +6,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type OutboxQueue interface {
@@ -80,25 +85,38 @@ func (r *OutboxRelay) RunOnce(ctx context.Context) (int, error) {
 	return len(batch), nil
 }
 
+// publish continues the trace of the transaction that wrote the event, when one was stored.
 func (r *OutboxRelay) publish(ctx context.Context, ev ClaimedEvent) {
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": ev.TraceParent})
+	ctx, span := tracer.Start(ctx, "outbox.publish", trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(attribute.String("event.type", ev.EventType), attribute.Int("outbox.attempts", ev.Attempts)))
+	res, err := r.attempt(ctx, ev)
+	span.SetAttributes(attribute.String("outbox.result", string(res)))
+	if res != RelayPublished && res != RelayLeaseLost {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, string(res))
+	}
+	span.End()
+	r.observe(res, ev, err)
+}
+
+func (r *OutboxRelay) attempt(ctx context.Context, ev ClaimedEvent) (RelayResult, error) {
 	if err := r.publisher.Publish(ctx, ev); err != nil {
 		if rerr := r.queue.Reschedule(context.WithoutCancel(ctx), ev.ID, r.cfg.Owner, r.Backoff(ev.Attempts), err); rerr != nil {
 			// The lease expires on its own and another publisher retries.
-			r.observe(RelayRescheduled, ev, rerr)
-			return
+			return RelayRescheduled, rerr
 		}
-		r.observe(RelayFailed, ev, err)
-		return
+		return RelayFailed, err
 	}
 	marked, err := r.queue.MarkPublished(context.WithoutCancel(ctx), ev.ID)
 	switch {
 	case err != nil:
 		// Published but unmarked: the event is republished later with the same id.
-		r.observe(RelayFailed, ev, err)
+		return RelayFailed, err
 	case !marked:
-		r.observe(RelayLeaseLost, ev, nil)
+		return RelayLeaseLost, nil
 	default:
-		r.observe(RelayPublished, ev, nil)
+		return RelayPublished, nil
 	}
 }
 

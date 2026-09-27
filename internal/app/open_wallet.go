@@ -29,7 +29,9 @@ func NewWalletOpener(uow UnitOfWork, clock Clock, ids IDGenerator) *WalletOpener
 
 // Open creates the wallet and, for a positive initial balance, records it as an
 // OPENING transaction with its ledger entry and events in the same commit.
-func (o *WalletOpener) Open(ctx context.Context, cmd OpenWalletCommand) (*wallet.Wallet, error) {
+func (o *WalletOpener) Open(ctx context.Context, cmd OpenWalletCommand) (w *wallet.Wallet, err error) {
+	ctx, span := tracer.Start(ctx, "wallet.open")
+	defer func() { endSpan(span, err) }()
 	player, err := wallet.ParsePlayerID(cmd.PlayerID)
 	if err != nil {
 		return nil, &wagering.FieldError{Field: "playerId", Reason: "must be a UUID"}

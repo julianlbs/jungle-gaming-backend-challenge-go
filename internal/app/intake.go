@@ -42,6 +42,8 @@ func NewWagerIntake(uow UnitOfWork, processor *WagerProcessor, clock Clock) *Wag
 
 func (i *WagerIntake) Handle(ctx context.Context, msg IncomingWager) (IntakeResult, error) {
 	start := time.Now()
+	ctx, span := tracer.Start(ctx, "wager.intake")
+	defer span.End()
 	received := i.clock.Now()
 	hash := MessageHash(msg.Command)
 	var res IntakeResult
@@ -79,10 +81,10 @@ func (i *WagerIntake) Handle(ctx context.Context, msg IncomingWager) (IntakeResu
 		return nil
 	})
 	if err != nil {
-		i.processor.observe(msg.Command, WagerOutcome{}, false, err, start)
+		i.processor.observe(ctx, msg.Command, WagerOutcome{}, false, err, start)
 		return IntakeResult{}, err
 	}
-	i.processor.observe(msg.Command, res.Outcome, res.Duplicate, nil, start)
+	i.processor.observe(ctx, msg.Command, res.Outcome, res.Duplicate, nil, start)
 	if !res.Duplicate {
 		i.processor.AfterCommit(ctx, res.Outcome)
 	}
