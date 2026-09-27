@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+/wallet
+*.exe
+*.test
+
+# Test and coverage output
+*.out
+coverage.*
+/tmp/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors and IDEs
+.idea/
+.vscode/
+.cursor/
+*.swp
+.DS_Store
