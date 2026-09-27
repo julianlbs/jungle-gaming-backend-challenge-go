@@ -24,8 +24,9 @@ import (
 
 // Options returns the full application for an already validated configuration.
 func Options(cfg config.Config) fx.Option {
-	// Fx stops hooks in reverse registration order: the API goes last so that on shutdown it
-	// turns unready and drains before the workers stop.
+	// Fx stops hooks in reverse registration order. Platform goes first so that metrics stay
+	// scrapeable until the end; the API goes last so that on shutdown it turns unready and
+	// drains before the workers stop.
 	var roles []fx.Option
 	if cfg.Roles.Has(config.RoleConsumer) || cfg.Roles.Has(config.RoleOutbox) {
 		roles = append(roles, AWS)
@@ -43,6 +44,7 @@ func Options(cfg config.Config) fx.Option {
 		roles = append(roles, API)
 	}
 	return fx.Options(
+		Platform,
 		fx.Options(roles...),
 		fx.Supply(cfg),
 		fx.StopTimeout(cfg.ShutdownTimeout),
@@ -51,7 +53,6 @@ func Options(cfg config.Config) fx.Option {
 			l.UseLogLevel(slog.LevelDebug)
 			return l
 		}),
-		Platform,
 		Postgres,
 		App,
 	)

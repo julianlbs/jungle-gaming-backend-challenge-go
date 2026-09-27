@@ -482,18 +482,19 @@ log de erro e na métrica `wallet_reconciliation_divergences_total`.
 ### Ordem do shutdown
 
 O Fx executa os `OnStop` em ordem inversa ao registro, com prazo total de `SHUTDOWN_TIMEOUT`.
-Entre os módulos de papel, o `api` é registrado por último para parar primeiro. A ordem
-observada num processo com todos os papéis é:
+O módulo `platform` é registrado primeiro, para parar por último, e entre os módulos de papel o
+`api` é registrado por último para parar primeiro. A ordem num processo com todos os papéis é:
 
-1. **Servidor de métricas** (`/metrics`), registrado pelo módulo `platform` depois dos papéis.
-2. **API**: `/health/ready` passa a responder `503 draining`, e `http.Server.Shutdown` para de
+1. **API**: `/health/ready` passa a responder `503 draining`, e `http.Server.Shutdown` para de
    aceitar conexões e espera as requisições em andamento.
-3. **Worker de pendências**: termina o lote atual (cada pendência é uma transação) e para.
-4. **Relay da outbox**: para de reivindicar e libera seus leases para outras instâncias.
-5. **Consumidor SQS**: para de buscar mensagens, libera imediatamente (visibilidade 0) as que
+2. **Worker de pendências**: termina o lote atual (cada pendência é uma transação) e para.
+3. **Relay da outbox**: para de reivindicar e libera seus leases para outras instâncias; o
+   worker de expurgo, quando habilitado, para junto.
+4. **Consumidor SQS**: para de buscar mensagens, libera imediatamente (visibilidade 0) as que
    ainda não começaram e espera as que estão em tratamento.
-6. **Pool do PostgreSQL** é fechado depois dos componentes que o usam, pois foi construído antes
+5. **Pool do PostgreSQL** é fechado depois dos componentes que o usam, pois foi construído antes
    deles.
+6. **Servidor de métricas** (`/metrics`), por último, para que o drain continue observável.
 
 O `stop_grace_period` do compose (40 s) é maior que `SHUTDOWN_TIMEOUT` (30 s) para o drain
 terminar antes de um `SIGKILL`. Mesmo um `SIGKILL` não perde nada: o que não foi confirmado é
