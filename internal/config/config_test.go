@@ -50,6 +50,9 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.SQS.Queues[1].ProviderID != "provider-b" || cfg.SQS.Queues[0].URL == cfg.SQS.Queues[1].URL {
 		t.Errorf("provider queues: %+v", cfg.SQS.Queues)
 	}
+	if cfg.SQS.MessageTimeout != 30*time.Second || cfg.SQS.VisibilityTimeout != DefaultQueueVisibilityTimeout {
+		t.Errorf("sqs timeouts: %+v", cfg.SQS)
+	}
 	if cfg.Pending.TTL != 30*time.Minute || cfg.Pending.MaxAttempts != 10 || cfg.InstanceID == "" {
 		t.Errorf("pending/instance: %+v %q", cfg.Pending, cfg.InstanceID)
 	}
@@ -142,6 +145,34 @@ func TestLoadReportsEveryProblem(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SNS_EVENTS_TOPIC_ARN") {
 		t.Error("outbox settings validated although the outbox role is disabled")
+	}
+}
+
+func TestMessageTimeoutMustStayBelowVisibility(t *testing.T) {
+	if _, err := Load(env(map[string]string{
+		"APP_ROLES":                    "consumer",
+		"SQS_MESSAGE_TIMEOUT":          "60s",
+		"SQS_QUEUE_VISIBILITY_TIMEOUT": "60s",
+	})); err == nil || !strings.Contains(err.Error(), "SQS_MESSAGE_TIMEOUT must be less than SQS_QUEUE_VISIBILITY_TIMEOUT") {
+		t.Fatalf("equal timeout accepted: %v", err)
+	}
+	if _, err := Load(env(map[string]string{
+		"APP_ROLES":                    "consumer",
+		"SQS_MESSAGE_TIMEOUT":          "90s",
+		"SQS_QUEUE_VISIBILITY_TIMEOUT": "60s",
+	})); err == nil || !strings.Contains(err.Error(), "SQS_MESSAGE_TIMEOUT") {
+		t.Fatalf("overlong timeout accepted: %v", err)
+	}
+	cfg, err := Load(env(map[string]string{
+		"APP_ROLES":                    "consumer",
+		"SQS_MESSAGE_TIMEOUT":          "4s",
+		"SQS_QUEUE_VISIBILITY_TIMEOUT": "5s",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SQS.MessageTimeout != 4*time.Second || cfg.SQS.VisibilityTimeout != 5*time.Second {
+		t.Fatalf("sqs timeouts: %+v", cfg.SQS)
 	}
 }
 

@@ -170,16 +170,17 @@ func newCluster(t *testing.T) *cluster {
 		"AWS_ACCESS_KEY_ID":     "test",
 		"AWS_SECRET_ACCESS_KEY": "test",
 		// The harness queue is trusted as provider-a. HTTP still exercises provider-b.
-		"SQS_PROVIDER_QUEUES":   "provider-a=" + c.queue,
-		"SQS_WAGER_DLQ_URL":     c.dlq,
-		"SQS_MESSAGE_TIMEOUT":   "4s",
-		"SNS_EVENTS_TOPIC_ARN":  c.topic,
-		"OUTBOX_POLL_INTERVAL":  "100ms",
-		"OUTBOX_LEASE":          "3s",
-		"PENDING_POLL_INTERVAL": "100ms",
-		"PENDING_LEASE":         "3s",
-		"PENDING_BACKOFF_BASE":  "200ms",
-		"PENDING_BACKOFF_MAX":   "1s",
+		"SQS_PROVIDER_QUEUES":          "provider-a=" + c.queue,
+		"SQS_WAGER_DLQ_URL":            c.dlq,
+		"SQS_MESSAGE_TIMEOUT":          "4s",
+		"SQS_QUEUE_VISIBILITY_TIMEOUT": "5s",
+		"SNS_EVENTS_TOPIC_ARN":         c.topic,
+		"OUTBOX_POLL_INTERVAL":         "100ms",
+		"OUTBOX_LEASE":                 "3s",
+		"PENDING_POLL_INTERVAL":        "100ms",
+		"PENDING_LEASE":                "3s",
+		"PENDING_BACKOFF_BASE":         "200ms",
+		"PENDING_BACKOFF_MAX":          "1s",
 	}
 	return c
 }

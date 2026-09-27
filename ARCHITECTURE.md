@@ -340,9 +340,11 @@ Motivos de DLQ (atributo `failureReason`): `INVALID_MESSAGE`, `PROVIDER_NOT_ALLO
 corpo original e os atributos `failureReason`, `failureDetail` (até 256 caracteres),
 `sourceMessageId` e `consumer`; na DLQ o `MessageDeduplicationId` é o ID da mensagem original.
 
-Visibility timeout da fila: 60 s. O tratamento de cada mensagem tem prazo de
-`SQS_MESSAGE_TIMEOUT` (30 s por padrão), menor que ele, e não é cancelado pelo shutdown: termina
-dentro do prazo ou falha e volta para a fila.
+Visibility timeout das filas: `SQS_QUEUE_VISIBILITY_TIMEOUT` (60 s por padrão), o mesmo valor
+que `deploy/aws/init-aws.sh` aplica. A configuração rejeita `SQS_MESSAGE_TIMEOUT` maior ou
+igual a esse visibility. O tratamento de cada mensagem tem prazo de `SQS_MESSAGE_TIMEOUT`
+(30 s por padrão) e não é cancelado pelo shutdown: termina dentro do prazo ou falha e volta
+para a fila.
 
 ## Transactional outbox
 

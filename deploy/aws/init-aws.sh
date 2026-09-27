@@ -19,11 +19,14 @@ dlq_url=$(aws sqs create-queue --queue-name wager-transactions-dlq.fifo \
   --query QueueUrl --output text)
 dlq_arn=$(queue_arn "$dlq_url")
 
+# Must match config.DefaultQueueVisibilityTimeout (SQS_QUEUE_VISIBILITY_TIMEOUT default).
+visibility_timeout="${SQS_QUEUE_VISIBILITY_TIMEOUT:-60}"
+
 # Attributes are (re)applied separately so an existing queue converges to this config.
 apply_wager_attributes() {
   aws sqs set-queue-attributes --queue-url "$1" --attributes "$(cat <<JSON
 {
-  "VisibilityTimeout": "60",
+  "VisibilityTimeout": "${visibility_timeout}",
   "ReceiveMessageWaitTimeSeconds": "20",
   "MessageRetentionPeriod": "345600",
   "RedrivePolicy": "{\"deadLetterTargetArn\":\"${dlq_arn}\",\"maxReceiveCount\":\"5\"}"

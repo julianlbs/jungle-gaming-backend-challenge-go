@@ -72,11 +72,16 @@ type ProviderQueue struct {
 	URL        string
 }
 
+// DefaultQueueVisibilityTimeout is the VisibilityTimeout set on wager queues by
+// deploy/aws/init-aws.sh. SQS_QUEUE_VISIBILITY_TIMEOUT defaults to this value.
+const DefaultQueueVisibilityTimeout = 60 * time.Second
+
 type SQS struct {
-	Queues         []ProviderQueue
-	DLQURL         string
-	MaxInFlight    int
-	MessageTimeout time.Duration
+	Queues            []ProviderQueue
+	DLQURL            string
+	MaxInFlight       int
+	MessageTimeout    time.Duration
+	VisibilityTimeout time.Duration
 }
 
 type SNS struct {
@@ -167,10 +172,14 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if cfg.Roles.Has(RoleConsumer) {
 		cfg.SQS = SQS{
-			Queues:         r.providerQueues("SQS_PROVIDER_QUEUES"),
-			DLQURL:         r.requiredURL("SQS_WAGER_DLQ_URL"),
-			MaxInFlight:    r.positive("SQS_MAX_IN_FLIGHT", "10", 100),
-			MessageTimeout: r.duration("SQS_MESSAGE_TIMEOUT", "30s", time.Second, 10*time.Minute),
+			Queues:            r.providerQueues("SQS_PROVIDER_QUEUES"),
+			DLQURL:            r.requiredURL("SQS_WAGER_DLQ_URL"),
+			MaxInFlight:       r.positive("SQS_MAX_IN_FLIGHT", "10", 100),
+			MessageTimeout:    r.duration("SQS_MESSAGE_TIMEOUT", "30s", time.Second, 10*time.Minute),
+			VisibilityTimeout: r.duration("SQS_QUEUE_VISIBILITY_TIMEOUT", DefaultQueueVisibilityTimeout.String(), time.Second, 12*time.Hour),
+		}
+		if cfg.SQS.MessageTimeout >= cfg.SQS.VisibilityTimeout {
+			r.fail("SQS_MESSAGE_TIMEOUT", "must be less than SQS_QUEUE_VISIBILITY_TIMEOUT")
 		}
 	}
 	if cfg.Roles.Has(RoleOutbox) {

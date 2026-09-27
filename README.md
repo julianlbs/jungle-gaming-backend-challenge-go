@@ -110,7 +110,8 @@ processo sai com código 2.
 | `SQS_PROVIDER_QUEUES` | obrigatória com `consumer` | Filas `providerId=url` separadas por vírgula; cada fila pertence a um único provedor |
 | `SQS_WAGER_DLQ_URL` | obrigatória com `consumer` | DLQ compartilhada `wager-transactions-dlq.fifo` |
 | `SQS_MAX_IN_FLIGHT` | `10` | Grupos de mensagens processados em paralelo |
-| `SQS_MESSAGE_TIMEOUT` | `30s` | Prazo de tratamento de uma mensagem (menor que o visibility timeout de 60 s) |
+| `SQS_MESSAGE_TIMEOUT` | `30s` | Prazo de tratamento de uma mensagem; tem de ser menor que `SQS_QUEUE_VISIBILITY_TIMEOUT` |
+| `SQS_QUEUE_VISIBILITY_TIMEOUT` | `60s` | Visibility timeout das filas de aposta; o mesmo valor padrão usado por `deploy/aws/init-aws.sh` |
 | `SNS_EVENTS_TOPIC_ARN` | obrigatória com `outbox` | Tópico `wallet-events.fifo` |
 | `OUTBOX_BATCH_SIZE` | `50` | Eventos por lote do relay |
 | `OUTBOX_LEASE` | `30s` | Duração do lease de um evento reivindicado |
@@ -141,7 +142,7 @@ Recursos criados pelo `deploy/aws/init-aws.sh`:
 
 | Recurso | Configuração |
 | --- | --- |
-| `wager-transactions-provider-a.fifo` | Fila FIFO do `provider-a`, sem deduplicação por conteúdo, visibility timeout 60 s, long polling de 20 s, retenção de 4 dias, redrive para a DLQ com `maxReceiveCount` 5 |
+| `wager-transactions-provider-a.fifo` | Fila FIFO do `provider-a`, sem deduplicação por conteúdo, visibility timeout = `SQS_QUEUE_VISIBILITY_TIMEOUT` (60 s por padrão), long polling de 20 s, retenção de 4 dias, redrive para a DLQ com `maxReceiveCount` 5 |
 | `wager-transactions-provider-b.fifo` | Igual à anterior, só para o `provider-b` |
 | `wager-transactions-dlq.fifo` | DLQ FIFO compartilhada, retenção de 14 dias |
 | `wallet-events.fifo` | Tópico SNS FIFO dos eventos de saída |
