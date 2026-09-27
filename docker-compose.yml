@@ -1,5 +1,30 @@
 name: jungle-wallet
 
+x-app: &app
+  build: .
+  image: jungle-wallet:local
+  command: ["serve"]
+  env_file:
+    - path: .env.example
+    - path: .env
+      required: false
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    aws-init:
+      condition: service_completed_successfully
+    keycloak:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/wallet", "health"]
+    interval: 5s
+    timeout: 4s
+    start_period: 10s
+    retries: 12
+  # Longer than SHUTDOWN_TIMEOUT so that the drain completes before SIGKILL.
+  stop_grace_period: 40s
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -65,6 +90,40 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+
+  migrate:
+    build: .
+    image: jungle-wallet:local
+    command: ["migrate", "up"]
+    environment:
+      MIGRATIONS_DATABASE_URL: postgres://wallet_owner:wallet_owner@postgres:5432/wallet?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app-1:
+    <<: *app
+    environment:
+      INSTANCE_ID: app-1
+    ports:
+      - "8081:8080"
+      - "9091:9090"
+
+  app-2:
+    <<: *app
+    environment:
+      INSTANCE_ID: app-2
+    ports:
+      - "8082:8080"
+      - "9092:9090"
+
+  app-3:
+    <<: *app
+    environment:
+      INSTANCE_ID: app-3
+    ports:
+      - "8083:8080"
+      - "9093:9090"
 
 volumes:
   pgdata:
