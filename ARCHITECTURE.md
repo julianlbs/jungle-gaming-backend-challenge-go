@@ -347,8 +347,12 @@ dentro do prazo ou falha e volta para a fila.
   expiração.
 - Publicado com sucesso: `published_at = now()` condicionado a `published_at IS NULL`; se outro
   publisher confirmou antes, o resultado é `lease_lost` e nada muda.
-- Falha na publicação: reagenda com backoff exponencial (1 s a 5 min, com jitter) e guarda
-  `last_error`. O relay nunca desiste de um evento.
+- Falha na publicação: reagenda com backoff exponencial (`OUTBOX_BACKOFF_BASE` até
+  `OUTBOX_BACKOFF_MAX`, 1 s a 5 min por padrão, com jitter) e guarda `last_error`. O relay nunca
+  desiste de um evento.
+- Expurgo: com `OUTBOX_RETENTION` definido, um worker do papel `outbox` apaga a cada minuto, em
+  lotes de 1000, eventos publicados há mais tempo que a retenção. Eventos não publicados nunca
+  são apagados (o trigger da tabela também impede). Por padrão (`0`) nada é apagado.
 - Instância morta com lease: o evento volta a ficar devido quando o lease vence. No shutdown
   gracioso, o relay libera seus leases (`ReleaseLeases`) para que outra instância os assuma na
   hora.
@@ -412,9 +416,11 @@ valores monetários em strings decimais. Operações que terminam `FAILED` não 
   interno `wallet-backoffice`, pois nenhum cliente de provedor recebe scopes `wallets:*`.
 - **Mensageria**: o script `init-aws.sh` cria as políticas `wallet-consumer` (consumir a fila,
   enviar à DLQ, publicar no tópico) e `provider-producer` (apenas enviar à fila) e as associa
-  aos usuários `wallet-consumer`, `provider-a-producer` e `provider-b-producer`. Além disso, o
-  consumidor valida o provedor contra `SQS_ALLOWED_PROVIDERS` e aplica todas as regras de
-  domínio.
+  aos usuários `wallet-consumer`, `provider-a-producer` e `provider-b-producer`. Cada execução
+  troca as chaves de acesso desses usuários e grava um arquivo de credenciais compartilhado; as
+  instâncias da aplicação usam o perfil `wallet-consumer`. Cada política cobre só os recursos e
+  ações do papel. Além disso, o consumidor valida o provedor contra `SQS_ALLOWED_PROVIDERS` e
+  aplica todas as regras de domínio.
 
 ## Contrato HTTP
 
@@ -506,7 +512,11 @@ refeito pela reentrega, pelos leases ou pelo cliente.
   `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`. Não registram tokens
   nem payloads financeiros completos.
 - **Health**: `/health/live` indica apenas que o processo responde; `/health/ready` verifica o
-  PostgreSQL (ping com prazo de 2 s) e passa a `503` quando o shutdown começa. `wallet health`
+  PostgreSQL (ping), a fila de apostas com `GetQueueAttributes` quando o papel `consumer` está
+  ativo e o tópico com `GetTopicAttributes` quando o papel `outbox` está ativo, tudo com prazo
+  total de 2 s e sem retries do SDK. Responde `503` com o nome da dependência indisponível
+  (`database unavailable`, `sqs unavailable`, `sns unavailable`) e passa a `503 draining` quando
+  o shutdown começa. `wallet health`
   consulta `/health/ready` e é o healthcheck do container.
 - **Métricas Prometheus** em `METRICS_ADDR` (`/metrics`), além das métricas de runtime Go e de
   processo:
@@ -518,6 +528,11 @@ refeito pela reentrega, pelos leases ou pelo cliente.
 | `sqs_message_retries_total` | contador | — |
 | `sqs_dead_lettered_total` | contador | `reason` |
 | `inbox_duplicates_total` | contador | `consumer` |
+| `wager_transactions_total` | contador | `channel` (`HTTP`, `SQS`), `kind`, `status` (status da transação ou `INVALID`, `IDEMPOTENCY_CONFLICT`, `CONCURRENT_UPDATE`, `UNAVAILABLE`, `DUPLICATE`, `ERROR`) |
+| `wager_processing_duration_seconds` | histograma | `channel`, `kind` |
+| `wager_idempotent_replays_total` | contador | `channel` |
+| `wager_idempotency_conflicts_total` | contador | `reason` (`idempotency_key_reused`, `external_transaction_id`, `message_id_reused`) |
+| `wallet_concurrency_conflicts_total` | contador | `reason` (`lock_timeout`, `serialization`, `deadlock`, `version`) |
 | `db_transaction_retries_total` | contador | `reason` (`serialization`, `deadlock`, `lock_timeout`, `unique_race`, `connection`) |
 | `outbox_pending_events` | gauge | — |
 | `outbox_oldest_pending_age_seconds` | gauge | — |
@@ -527,23 +542,19 @@ refeito pela reentrega, pelos leases ou pelo cliente.
 | `wallet_reconciliation_runs_total` | contador | `consistent` |
 | `wallet_reconciliation_divergences_total` | contador | — |
 
-O atraso da outbox é observado por `outbox_oldest_pending_age_seconds`; disputas de concorrência
-aparecem em `db_transaction_retries_total` (`lock_timeout`, `unique_race`).
+As métricas `wager_*` são registradas pelo caso de uso, então HTTP e SQS são contados da mesma
+forma; os labels vêm de conjuntos fechados (tipo inválido vira `UNKNOWN`) e nunca levam
+identificadores. `wallet_concurrency_conflicts_total` conta cada falha por lock timeout,
+serialização ou deadlock, inclusive a última tentativa, e cada verificação de versão perdida.
+O atraso da outbox é observado por `outbox_oldest_pending_age_seconds`.
 
 ## Limitações e trabalho não concluído
 
-- Alguns instrumentos estão registrados em `internal/platform/metrics` mas ainda não são
-  incrementados: `wager_transactions_total`, `wager_idempotent_replays_total`,
-  `wager_idempotency_conflicts_total`, `wager_processing_duration_seconds` e
-  `wallet_concurrency_conflicts_total`. Eles aparecem em `/metrics` sem amostras.
-- `/health/ready` verifica apenas o PostgreSQL; a disponibilidade do SQS não entra na
-  readiness. O consumidor lida com o SQS indisponível repetindo o `ReceiveMessage` com backoff
-  (até 30 s).
-- A LocalStack Community não aplica políticas IAM, então as políticas de `deploy/aws/policies`
-  documentam o modelo de acesso mas não são verificadas localmente; a aplicação usa as
-  credenciais locais de `.env.example`.
-- `OutboxStore.PurgePublished` existe, mas nenhum worker o executa; eventos publicados ficam na
-  tabela.
-- O backoff da outbox (1 s a 5 min) não é configurável por variável de ambiente.
+- A LocalStack Community não aplica políticas IAM. A aplicação se autentica com a chave do
+  usuário `wallet-consumer`, mas localmente nada impede essa chave (ou qualquer outra) de acessar
+  recursos fora da política; o menor privilégio só é verificado numa conta AWS real. Os testes
+  de integração e e2e criam filas próprias e usam credenciais fixas, fora dessas políticas.
+- As três instâncias do compose executam todos os papéis e por isso compartilham um usuário;
+  separar papéis por instância pediria usuários e políticas distintos para consumo e publicação.
 - Moedas limitadas a `BRL`, `EUR` e `USD`, todas com duas casas.
 - Não há tracing distribuído nem teste de carga.

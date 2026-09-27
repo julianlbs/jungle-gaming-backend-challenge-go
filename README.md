@@ -46,7 +46,7 @@ O compose sobe, nesta ordem:
 | `postgres` | PostgreSQL 17; `deploy/postgres/init` cria os papéis `wallet_owner` e `wallet_app` e o banco `wallet` |
 | `keycloak` | Keycloak 26 com o realm `wallet` importado de `deploy/keycloak/wallet-realm.json` |
 | `localstack` | SQS, SNS e IAM locais |
-| `aws-init` | Executa `deploy/aws/init-aws.sh`: filas, DLQ, redrive, tópico, fila de auditoria e políticas IAM |
+| `aws-init` | Executa `deploy/aws/init-aws.sh`: filas, DLQ, redrive, tópico, fila de auditoria, políticas e usuários IAM com chaves de acesso |
 | `migrate` | Aplica as migrations com o papel dono do schema (`wallet migrate up`) e termina |
 | `app-1`, `app-2`, `app-3` | Três instâncias independentes com todos os papéis habilitados |
 
@@ -105,7 +105,8 @@ processo sai com código 2.
 | `OIDC_AUDIENCE` | obrigatória com `api` | Audience exigida (`wallet-api`) |
 | `AWS_REGION` | `us-east-1` | Região AWS |
 | `AWS_ENDPOINT_URL` | — | Endpoint alternativo (LocalStack) |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Credenciais do SDK AWS |
+| `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE` | `/aws/credentials`, `wallet-consumer` no compose | Arquivo e perfil de credenciais gerados pelo `aws-init` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Alternativa às credenciais do arquivo, fora do compose |
 | `SQS_WAGER_QUEUE_URL` | obrigatória com `consumer` | Fila `wager-transactions.fifo` |
 | `SQS_WAGER_DLQ_URL` | obrigatória com `consumer` | Fila `wager-transactions-dlq.fifo` |
 | `SQS_ALLOWED_PROVIDERS` | obrigatória com `consumer` | Provedores aceitos na fila, separados por vírgula |
@@ -115,6 +116,9 @@ processo sai com código 2.
 | `OUTBOX_BATCH_SIZE` | `50` | Eventos por lote do relay |
 | `OUTBOX_LEASE` | `30s` | Duração do lease de um evento reivindicado |
 | `OUTBOX_POLL_INTERVAL` | `250ms` | Intervalo entre varreduras da outbox |
+| `OUTBOX_BACKOFF_BASE` | `1s` | Atraso inicial após uma falha de publicação |
+| `OUTBOX_BACKOFF_MAX` | `5m` | Atraso máximo entre tentativas de publicação |
+| `OUTBOX_RETENTION` | `0` | Idade a partir da qual eventos publicados são apagados (mínimo `1h`); `0` mantém todos |
 | `PENDING_POLL_INTERVAL` | `500ms` | Intervalo entre varreduras de pendências |
 | `PENDING_LEASE` | `30s` | Lease de uma pendência reivindicada |
 | `PENDING_BATCH_SIZE` | `50` | Pendências por lote |
@@ -141,6 +145,11 @@ Recursos criados pelo `deploy/aws/init-aws.sh`:
 | `wallet-events.fifo` | Tópico SNS FIFO dos eventos de saída |
 | `wallet-events-audit.fifo` | Fila assinante do tópico (raw delivery), útil para inspecionar eventos |
 | Políticas IAM | `wallet-consumer` (consumir a fila, enviar à DLQ, publicar no tópico) e `provider-producer` (enviar à fila) |
+| Usuários IAM | `wallet-consumer`, `provider-a-producer` e `provider-b-producer`, cada um com a política correspondente e uma chave de acesso nova a cada execução, gravada como perfil no volume `aws-credentials` (`/aws/credentials` nos containers da aplicação) |
+
+As instâncias `app-1` a `app-3` usam o perfil `wallet-consumer`. A LocalStack Community não
+avalia políticas IAM, então localmente as chaves identificam o chamador mas não restringem o
+acesso; numa conta AWS as mesmas políticas passam a ser aplicadas.
 
 Clientes do realm `wallet` (todos `client_credentials`, segredos apenas locais):
 
@@ -269,7 +278,7 @@ Health e métricas (sem autenticação):
 ```sh
 curl -s $API/health/live
 curl -s $API/health/ready
-curl -s http://localhost:9091/metrics | grep -E '^(sqs_|outbox_|pending_|inbox_|db_|wallet_reconciliation)'
+curl -s http://localhost:9091/metrics | grep -E '^(wager_|wallet_|sqs_|outbox_|pending_|inbox_|db_)'
 ```
 
 Os endpoints, scopes e códigos de resposta estão documentados em
