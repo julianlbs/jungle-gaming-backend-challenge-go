@@ -49,9 +49,11 @@ func TestSameBetAcrossInstancesHasOneEffect(t *testing.T) {
 			t.Fatalf("request %d: %d %v", i, r.status, r.body)
 		}
 		if i == 0 {
-			txID = r.body["id"]
-		} else if r.body["id"] != txID {
-			t.Fatalf("request %d returned transaction %v, want %v", i, r.body["id"], txID)
+			if txID = r.body["transactionId"]; txID == nil {
+				t.Fatalf("response without transactionId: %v", r.body)
+			}
+		} else if r.body["transactionId"] != txID {
+			t.Fatalf("request %d returned transaction %v, want %v", i, r.body["transactionId"], txID)
 		}
 	}
 	if got := c.balance(w.id); got != "70.00" {
