@@ -180,6 +180,8 @@ var brl = must(money.ParseCurrency("BRL"))
 
 func brlAmount(s string) money.Money { return must(money.Parse(s, brl)) }
 
+func brlFromMinor(minor int64) (money.Money, error) { return money.FromMinor(minor, brl) }
+
 // seededWallet is a wallet opened with a positive balance through the repositories.
 type seededWallet struct {
 	ID        wallet.ID
