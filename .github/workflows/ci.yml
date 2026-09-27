@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt-check:
+    name: fmt-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt -s -l
+        run: |
+          out=$(gofmt -s -l .)
+          if [ -n "$out" ]; then
+            echo "$out"
+            exit 1
+          fi
+
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: |
+          go vet ./...
+          go vet -tags=integration,e2e ./...
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint v2.5.0
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.5.0
+          args: ./...
+          only-new-issues: false
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install gcc for the race detector
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - name: go test -race
+        run: go test -race ./...
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: docker compose build
+        run: docker compose build
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: "1"
+      TEST_DATABASE_OWNER_URL: postgres://wallet_owner:wallet_owner@localhost:5432/wallet?sslmode=disable
+      TEST_DATABASE_APP_URL: postgres://wallet_app:wallet_app@localhost:5432/wallet?sslmode=disable
+      TEST_AWS_ENDPOINT_URL: http://localhost:4566
+      TEST_KEYCLOAK_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install gcc for the race detector
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - name: Start PostgreSQL, Keycloak and LocalStack
+        run: |
+          docker compose up -d --wait --wait-timeout 600 postgres keycloak localstack
+          docker compose up --no-deps --exit-code-from aws-init aws-init
+          docker compose up --no-deps --exit-code-from migrate migrate
+          docker compose stop app-1 app-2 app-3
+      - name: go test -race -tags=integration
+        run: go test -race -tags=integration -count=1 ./test/integration/...
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CGO_ENABLED: "1"
+      TEST_DATABASE_OWNER_URL: postgres://wallet_owner:wallet_owner@localhost:5432/wallet?sslmode=disable
+      TEST_DATABASE_APP_URL: postgres://wallet_app:wallet_app@localhost:5432/wallet?sslmode=disable
+      TEST_AWS_ENDPOINT_URL: http://localhost:4566
+      TEST_KEYCLOAK_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install gcc for the race detector
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - name: Start PostgreSQL, Keycloak and LocalStack
+        run: |
+          docker compose up -d --wait --wait-timeout 600 postgres keycloak localstack
+          docker compose up --no-deps --exit-code-from aws-init aws-init
+          docker compose up --no-deps --exit-code-from migrate migrate
+          docker compose stop app-1 app-2 app-3
+      - name: go test -race -tags=e2e
+        run: go test -race -tags=e2e -count=1 -timeout=20m ./test/e2e/...

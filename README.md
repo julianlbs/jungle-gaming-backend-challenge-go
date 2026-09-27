@@ -335,6 +335,21 @@ Os testes usam, por padrão, os endereços do compose no host. Para outro ambien
 | `TEST_AWS_ENDPOINT_URL` | `http://localhost:4566` |
 | `TEST_KEYCLOAK_URL` | `http://localhost:8080` |
 
+### Integração contínua
+
+Em cada push e pull request, [`.github/workflows/ci.yml`](.github/workflows/ci.yml) repete a
+verificação local no Ubuntu, com o Go de `go.mod` (1.25.x) e gcc para o detector de corrida. Os
+jobs são `fmt-check`, `vet`, `lint` (golangci-lint v2.5.0), `test` (`go test -race ./...`),
+`image` (`docker compose build`, a imagem de produção, sem a tag `faultinject`), `integration` e
+`e2e`.
+
+Integração e e2e sobem PostgreSQL, Keycloak e LocalStack como `make deps-up` (`aws-init` e
+`migrate` inclusos) e param `app-1`, `app-2` e `app-3` se o compose os tiver iniciado. Em seguida
+rodam, contra esses serviços reais, `go test -race -tags=integration -count=1 ./test/integration/...`
+e `go test -race -tags=e2e -count=1 -timeout=20m ./test/e2e/...`, com as variáveis `TEST_*` acima
+apontando para as portas publicadas no host. Se um serviço não ficar saudável, o job falha. O
+teste de carga não entra nesse workflow.
+
 ### Integração (`-tags=integration`)
 
 Rodam contra PostgreSQL, Keycloak e LocalStack reais. Cada teste recebe um banco próprio,
@@ -463,6 +478,7 @@ internal/config/            carga e validação do ambiente
 internal/wiring/            módulos Fx por papel
 migrations/                 schema versionado
 deploy/                     init do PostgreSQL, realm do Keycloak, provisionamento AWS
+.github/workflows/          CI com os mesmos alvos do Makefile
 test/integration/, test/e2e/
 test/load/                  script k6 do teste de carga
 ```
