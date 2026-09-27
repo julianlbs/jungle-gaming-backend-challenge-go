@@ -21,8 +21,8 @@ import (
 
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	ln := must(net.Listen("tcp", "127.0.0.1:0"))
-	defer ln.Close()
+	ln := must(new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0"))
+	defer func() { _ = ln.Close() }()
 	return ln.Addr().String()
 }
 
@@ -73,10 +73,9 @@ func TestApplicationStartsAndShutsDownGracefully(t *testing.T) {
 		}
 	})
 
-	resp := must(http.Get("http://" + httpAddr + "/health/ready"))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("ready = %d", resp.StatusCode)
+	status, _ := getReady(t, httpAddr)
+	if status != http.StatusOK {
+		t.Fatalf("ready = %d", status)
 	}
 
 	w := f.openWallet(t, "100.00")
@@ -102,7 +101,7 @@ func TestApplicationStartsAndShutsDownGracefully(t *testing.T) {
 	if d := time.Since(began); d > 10*time.Second {
 		t.Fatalf("shutdown took %v", d)
 	}
-	if _, err := net.DialTimeout("tcp", httpAddr, time.Second); err == nil {
+	if _, err := (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "tcp", httpAddr); err == nil {
 		t.Fatal("http server still accepting connections")
 	}
 	if n := countRows(t, f.db, `SELECT count(*) FROM outbox_events WHERE locked_by IS NOT NULL`); n != 0 {
@@ -147,10 +146,19 @@ func TestReadinessFailsWhenTheWagerQueueIsMissing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = application.Stop(context.Background()) })
 
-	resp := must(http.Get("http://" + httpAddr + "/health/ready"))
-	body := must(io.ReadAll(resp.Body))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "sqs unavailable") {
-		t.Fatalf("ready = %d %s", resp.StatusCode, body)
+	status, body := getReady(t, httpAddr)
+	if status != http.StatusServiceUnavailable || !strings.Contains(string(body), "sqs unavailable") {
+		t.Fatalf("ready = %d %s", status, body)
 	}
+}
+
+func getReady(t *testing.T, addr string) (int, []byte) {
+	t.Helper()
+	req := must(http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/health/ready", nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, must(io.ReadAll(resp.Body))
 }

@@ -156,8 +156,8 @@ func registerMetricsServer(lc fx.Lifecycle, cfg config.Config, m *metrics.Metric
 	mux.Handle("GET /metrics", m.Handler())
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	lc.Append(fx.Hook{
-		OnStart: func(context.Context) error {
-			ln, err := net.Listen("tcp", cfg.MetricsAddr)
+		OnStart: func(ctx context.Context) error {
+			ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.MetricsAddr)
 			if err != nil {
 				return fmt.Errorf("metrics listener: %w", err)
 			}

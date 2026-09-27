@@ -50,7 +50,9 @@ func newKeycloakAPI(t *testing.T) *apiFixture {
 func keycloakToken(t *testing.T, client string) string {
 	t.Helper()
 	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {client}, "client_secret": {client + "-local-secret"}}
-	resp, err := http.PostForm(keycloakIssuer()+"/protocol/openid-connect/token", form)
+	req := must(http.NewRequestWithContext(t.Context(), http.MethodPost, keycloakIssuer()+"/protocol/openid-connect/token", strings.NewReader(form.Encode())))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("token for %s: %v", client, err)
 	}
@@ -88,7 +90,7 @@ func TestKeycloakCredentials(t *testing.T) {
 	expectStatus(t, r, http.StatusCreated, "")
 	walletID := r.body["id"].(string)
 
-	bet := func(ext string) map[string]any { return wagerBody(walletID, player, "provider-a", ext, "BET", "10.00") }
+	bet := func(ext string) map[string]any { return wagerBody(walletID, player, ext, "BET", "10.00") }
 	post := func(token, ext string) apiResponse {
 		return f.do(t, http.MethodPost, "/wagering/transactions", token, map[string]string{"Idempotency-Key": "provider-a:" + ext}, bet(ext))
 	}

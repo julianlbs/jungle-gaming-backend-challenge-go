@@ -294,7 +294,7 @@ Os endpoints, scopes e códigos de resposta estão documentados em
 | `make test-e2e` | `go test -race -tags=e2e -count=1 -timeout=20m ./test/e2e/...` | PostgreSQL, Keycloak e LocalStack |
 | `make vet` | `go vet` com e sem as tags `integration,e2e` | nenhuma |
 | `make fmt-check` | Falha se algum arquivo não estiver formatado com `gofmt -s` | nenhuma |
-| `make lint` | `golangci-lint run ./...` | golangci-lint instalado |
+| `make lint` | `golangci-lint run ./...` com a versão v2.5.0 fixada, via `go run` (sobrescreva com `GOLANGCI_LINT=golangci-lint`) | nenhuma |
 
 ### Preparar as dependências
 

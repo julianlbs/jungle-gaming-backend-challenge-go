@@ -96,8 +96,8 @@ func newAPI(log *slog.Logger, m *metrics.Metrics, v httpapi.TokenVerifier, opene
 func registerHTTPServer(lc fx.Lifecycle, cfg config.Config, api *httpapi.API, ready *httpapi.Readiness, log *slog.Logger) {
 	srv := httpapi.NewServer(cfg.HTTPAddr, api.Handler())
 	lc.Append(fx.Hook{
-		OnStart: func(context.Context) error {
-			ln, err := net.Listen("tcp", cfg.HTTPAddr)
+		OnStart: func(ctx context.Context) error {
+			ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.HTTPAddr)
 			if err != nil {
 				return fmt.Errorf("http listener: %w", err)
 			}

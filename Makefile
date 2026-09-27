@@ -1,4 +1,5 @@
 GO        ?= go
+GOLANGCI_LINT ?= $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0
 COMPOSE   ?= docker compose
 TEST_TAGS := integration,e2e
 
@@ -16,7 +17,7 @@ vet:
 	$(GO) vet -tags=$(TEST_TAGS) ./...
 
 lint:
-	golangci-lint run ./...
+	$(GOLANGCI_LINT) run ./...
 
 test:
 	$(GO) test ./...

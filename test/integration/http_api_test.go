@@ -60,7 +60,7 @@ func (f *apiFixture) do(t *testing.T, method, path, token string, headers map[st
 	if body != nil {
 		reader = bytes.NewReader(must(json.Marshal(body)))
 	}
-	req := must(http.NewRequest(method, f.server.URL+path, reader))
+	req := must(http.NewRequestWithContext(t.Context(), method, f.server.URL+path, reader))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -70,8 +70,11 @@ func (f *apiFixture) do(t *testing.T, method, path, token string, headers map[st
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp := must(http.DefaultClient.Do(req))
-	defer resp.Body.Close()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
 	out := apiResponse{status: resp.StatusCode, header: resp.Header}
 	raw := must(io.ReadAll(resp.Body))
 	if len(raw) > 0 {
@@ -96,9 +99,9 @@ func brlBody(amount string) map[string]string {
 	return map[string]string{"amount": amount, "currency": "BRL"}
 }
 
-func wagerBody(walletID, playerID, provider, externalID, kind, amount string) map[string]any {
+func wagerBody(walletID, playerID, externalID, kind, amount string) map[string]any {
 	return map[string]any{
-		"providerId": provider, "externalTransactionId": externalID,
+		"providerId": "provider-a", "externalTransactionId": externalID,
 		"playerId": playerID, "walletId": walletID,
 		"roundId": "round-1", "gameId": "game-1", "kind": kind, "money": brlBody(amount),
 	}
@@ -156,7 +159,7 @@ func TestHTTPWalletAndWagerFlow(t *testing.T) {
 	expectStatus(t, r, http.StatusForbidden, "FORBIDDEN")
 
 	key := map[string]string{"Idempotency-Key": "provider-a:tx-1"}
-	bet := wagerBody(walletID, player, "provider-a", "tx-1", "BET", "25.00")
+	bet := wagerBody(walletID, player, "tx-1", "BET", "25.00")
 
 	r = f.do(t, http.MethodPost, "/wagering/transactions", providerA, nil, bet)
 	expectStatus(t, r, http.StatusBadRequest, "VALIDATION_ERROR")
@@ -178,20 +181,20 @@ func TestHTTPWalletAndWagerFlow(t *testing.T) {
 		t.Fatalf("replay body = %v", r.body)
 	}
 
-	changed := wagerBody(walletID, player, "provider-a", "tx-1", "BET", "26.00")
+	changed := wagerBody(walletID, player, "tx-1", "BET", "26.00")
 	r = f.do(t, http.MethodPost, "/wagering/transactions", providerA, key, changed)
 	expectStatus(t, r, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED")
 	r = f.do(t, http.MethodPost, "/wagering/transactions", providerA, map[string]string{"Idempotency-Key": "other"}, bet)
 	expectStatus(t, r, http.StatusConflict, "EXTERNAL_TRANSACTION_CONFLICT")
 
-	big := wagerBody(walletID, player, "provider-a", "tx-2", "BET", "500.00")
+	big := wagerBody(walletID, player, "tx-2", "BET", "500.00")
 	r = f.do(t, http.MethodPost, "/wagering/transactions", providerA, map[string]string{"Idempotency-Key": "provider-a:tx-2"}, big)
 	expectStatus(t, r, http.StatusUnprocessableEntity, "INSUFFICIENT_FUNDS")
 	if r.body["status"] != "REJECTED" {
 		t.Fatalf("rejected body = %v", r.body)
 	}
 
-	refund := wagerBody(walletID, player, "provider-a", "tx-3", "REFUND", "10.00")
+	refund := wagerBody(walletID, player, "tx-3", "REFUND", "10.00")
 	refund["referenceExternalTransactionId"] = "tx-unknown"
 	r = f.do(t, http.MethodPost, "/wagering/transactions", providerA, map[string]string{"Idempotency-Key": "provider-a:tx-3"}, refund)
 	expectStatus(t, r, http.StatusAccepted, "")

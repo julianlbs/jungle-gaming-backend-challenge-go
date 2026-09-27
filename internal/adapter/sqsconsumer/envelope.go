@@ -48,7 +48,7 @@ func decode(body string) (envelope, app.WagerCommand, error) {
 	var env envelope
 	dec := json.NewDecoder(strings.NewReader(body))
 	if err := dec.Decode(&env); err != nil {
-		return env, app.WagerCommand{}, fmt.Errorf("%w: %v", errInvalidMessage, err)
+		return env, app.WagerCommand{}, fmt.Errorf("%w: %w", errInvalidMessage, err)
 	}
 	if dec.More() {
 		return env, app.WagerCommand{}, fmt.Errorf("%w: trailing data", errInvalidMessage)

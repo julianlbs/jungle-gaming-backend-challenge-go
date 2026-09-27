@@ -20,6 +20,16 @@ linters:
     gosec:
       excludes:
         - G115
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - linters: [gosec]
+        text: G404
+        path: internal/(adapter/postgres/retry|app/(pending_policy|relay))\.go
+      - linters: [gosec]
+        text: G101|G204
+        path: _test\.go
 
 formatters:
   enable:

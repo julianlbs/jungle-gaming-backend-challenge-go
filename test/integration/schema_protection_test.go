@@ -89,7 +89,7 @@ func TestLedgerChainAndWalletConsistency(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback(ctx)
+		defer func() { _ = tx.Rollback(ctx) }()
 		if _, err := tx.Exec(ctx, `UPDATE wallets SET balance_minor = 1000000, version = version + 1,
 			updated_at = now() WHERE id = $1`, w.ID.UUID()); err != nil {
 			t.Fatalf("update should be deferred to commit: %v", err)

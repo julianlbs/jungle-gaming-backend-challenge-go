@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -62,7 +61,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	env.binary = filepath.Join(dir, "wallet")
-	build := exec.Command("go", "build", "-tags", "faultinject", "-o", env.binary, "../../cmd/wallet")
+	build := exec.CommandContext(context.Background(), "go", "build", "-tags", "faultinject", "-o", env.binary, "../../cmd/wallet")
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building binary:", err)
@@ -98,26 +97,24 @@ func adminExec(ctx context.Context, dsn, sql string) error {
 
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	ln := must(net.Listen("tcp", "127.0.0.1:0"))
+	ln := must(new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0"))
 	defer ln.Close()
 	return ln.Addr().String()
 }
 
 // cluster is the shared infrastructure of one test: a database, queues, a topic and tokens.
 type cluster struct {
-	t        *testing.T
-	dbURL    string
-	db       *pgxpool.Pool
-	sqs      *sqs.Client
-	sns      *sns.Client
-	queue    string
-	dlq      string
-	topic    string
-	audit    string
-	tokens   map[string]string
-	baseEnv  map[string]string
-	mu       sync.Mutex
-	nextPort int
+	t       *testing.T
+	dbURL   string
+	db      *pgxpool.Pool
+	sqs     *sqs.Client
+	sns     *sns.Client
+	queue   string
+	dlq     string
+	topic   string
+	audit   string
+	tokens  map[string]string
+	baseEnv map[string]string
 }
 
 func newCluster(t *testing.T) *cluster {
@@ -139,7 +136,7 @@ func newCluster(t *testing.T) *cluster {
 		ALTER SCHEMA public OWNER TO wallet_owner; GRANT USAGE ON SCHEMA public TO wallet_app`); err != nil {
 		t.Fatal(err)
 	}
-	migrate := exec.Command(env.binary, "migrate", "up")
+	migrate := exec.CommandContext(t.Context(), env.binary, "migrate", "up")
 	migrate.Env = append(os.Environ(), "MIGRATIONS_DATABASE_URL="+withDatabase(env.ownerURL, name))
 	if out, err := migrate.CombinedOutput(); err != nil {
 		t.Fatalf("migrate: %v\n%s", err, out)
@@ -190,7 +187,9 @@ func newCluster(t *testing.T) *cluster {
 func fetchToken(t *testing.T, client string) string {
 	t.Helper()
 	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {client}, "client_secret": {client + "-local-secret"}}
-	resp, err := http.PostForm(env.issuer+"/protocol/openid-connect/token", form)
+	req := must(http.NewRequestWithContext(t.Context(), http.MethodPost, env.issuer+"/protocol/openid-connect/token", strings.NewReader(form.Encode())))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("token for %s: %v", client, err)
 	}
@@ -269,7 +268,7 @@ func (c *cluster) spawn(name string, overrides map[string]string) (*instance, st
 
 	inst.logPath = filepath.Join(c.t.TempDir(), name+".log")
 	logFile := must(os.Create(inst.logPath))
-	inst.cmd = exec.Command(env.binary, "serve")
+	inst.cmd = exec.CommandContext(context.Background(), env.binary, "serve")
 	inst.cmd.Stdout, inst.cmd.Stderr = logFile, logFile
 	inst.cmd.Env = os.Environ()
 	for k, v := range vars {
@@ -281,7 +280,7 @@ func (c *cluster) spawn(name string, overrides map[string]string) (*instance, st
 	go func() {
 		_ = inst.cmd.Wait()
 		inst.state = inst.cmd.ProcessState
-		logFile.Close()
+		_ = logFile.Close()
 		close(inst.done)
 	}()
 	c.t.Cleanup(func() {
@@ -315,8 +314,9 @@ func (c *cluster) start(name string, overrides map[string]string) *instance {
 			c.t.Fatalf("%s exited during startup:\n%s", name, tail(out, 40))
 		default:
 		}
-		if resp, err := http.Get(inst.url("/health/ready")); err == nil {
-			resp.Body.Close()
+		req := must(http.NewRequestWithContext(context.Background(), http.MethodGet, inst.url("/health/ready"), nil))
+		if resp, err := httpClient.Do(req); err == nil {
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return inst
 			}
@@ -397,7 +397,7 @@ func (c *cluster) call(i *instance, method, path, client string, headers map[str
 	if body != nil {
 		reader = bytes.NewReader(must(json.Marshal(body)))
 	}
-	req := must(http.NewRequest(method, i.url(path), reader))
+	req := must(http.NewRequestWithContext(context.Background(), method, i.url(path), reader))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -65,7 +65,7 @@ func observe(log *slog.Logger, m *metrics.Metrics, next http.Handler) http.Handl
 
 		defer func() {
 			if v := recover(); v != nil {
-				if v == http.ErrAbortHandler {
+				if err, ok := v.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(v)
 				}
 				log.ErrorContext(r.Context(), "handler panicked", "panic", fmt.Sprint(v), "stack", string(debug.Stack()))

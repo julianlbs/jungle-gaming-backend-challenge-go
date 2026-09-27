@@ -113,7 +113,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		ShutdownTimeout: r.duration("SHUTDOWN_TIMEOUT", "30s", time.Second, 5*time.Minute),
 		Postgres: Postgres{
 			URL:              r.required("DATABASE_URL"),
-			MaxConns:         int32(r.integer("DB_MAX_CONNS", "20", 1, 1000)),
+			MaxConns:         int32(r.positive("DB_MAX_CONNS", "20", 1000)),
 			LockTimeout:      r.duration("DB_LOCK_TIMEOUT", "2s", 10*time.Millisecond, time.Minute),
 			StatementTimeout: r.duration("DB_STATEMENT_TIMEOUT", "5s", 10*time.Millisecond, 5*time.Minute),
 			StartupTimeout:   r.duration("DB_STARTUP_TIMEOUT", "30s", time.Second, 10*time.Minute),
@@ -123,7 +123,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			EndpointURL: r.optionalURL("AWS_ENDPOINT_URL"),
 		},
 		Outbox: Outbox{
-			BatchSize:    r.integer("OUTBOX_BATCH_SIZE", "50", 1, 1000),
+			BatchSize:    r.positive("OUTBOX_BATCH_SIZE", "50", 1000),
 			Lease:        r.duration("OUTBOX_LEASE", "30s", time.Second, time.Hour),
 			PollInterval: r.duration("OUTBOX_POLL_INTERVAL", "250ms", 10*time.Millisecond, time.Minute),
 			BackoffBase:  r.duration("OUTBOX_BACKOFF_BASE", "1s", time.Millisecond, time.Hour),
@@ -133,10 +133,10 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		Pending: Pending{
 			PollInterval: r.duration("PENDING_POLL_INTERVAL", "500ms", 10*time.Millisecond, time.Minute),
 			Lease:        r.duration("PENDING_LEASE", "30s", time.Second, time.Hour),
-			BatchSize:    r.integer("PENDING_BATCH_SIZE", "50", 1, 1000),
+			BatchSize:    r.positive("PENDING_BATCH_SIZE", "50", 1000),
 			BackoffBase:  r.duration("PENDING_BACKOFF_BASE", "2s", time.Millisecond, time.Hour),
 			BackoffMax:   r.duration("PENDING_BACKOFF_MAX", "5m", time.Millisecond, 24*time.Hour),
-			MaxAttempts:  r.integer("PENDING_MAX_ATTEMPTS", "10", 1, 10000),
+			MaxAttempts:  r.positive("PENDING_MAX_ATTEMPTS", "10", 10000),
 			TTL:          r.duration("PENDING_REFERENCE_TTL", "30m", 100*time.Millisecond, 7*24*time.Hour),
 		},
 	}
@@ -153,7 +153,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			QueueURL:         r.requiredURL("SQS_WAGER_QUEUE_URL"),
 			DLQURL:           r.requiredURL("SQS_WAGER_DLQ_URL"),
 			AllowedProviders: r.list("SQS_ALLOWED_PROVIDERS"),
-			MaxInFlight:      r.integer("SQS_MAX_IN_FLIGHT", "10", 1, 100),
+			MaxInFlight:      r.positive("SQS_MAX_IN_FLIGHT", "10", 100),
 			MessageTimeout:   r.duration("SQS_MESSAGE_TIMEOUT", "30s", time.Second, 10*time.Minute),
 		}
 		if len(cfg.SQS.AllowedProviders) == 0 {
@@ -231,12 +231,12 @@ func validURL(v string) bool {
 	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
-func (r *reader) integer(key, fallback string, lo, hi int) int {
+func (r *reader) positive(key, fallback string, hi int) int {
 	raw := r.str(key, fallback)
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < lo || n > hi {
-		r.fail(key, fmt.Sprintf("must be an integer between %d and %d", lo, hi))
-		return lo
+	if err != nil || n < 1 || n > hi {
+		r.fail(key, fmt.Sprintf("must be an integer between 1 and %d", hi))
+		return 1
 	}
 	return n
 }

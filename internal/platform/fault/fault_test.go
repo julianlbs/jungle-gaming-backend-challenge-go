@@ -1,6 +1,7 @@
 package fault
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -13,12 +14,13 @@ func TestHitKillsOnlyAtTheConfiguredPoint(t *testing.T) {
 		Hit(ConsumerAfterCommit)
 		os.Exit(0)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHitKillsOnlyAtTheConfiguredPoint$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestHitKillsOnlyAtTheConfiguredPoint$")
 	cmd.Env = append(os.Environ(), "FAULT_CHILD=1", "FAULT_POINT="+ConsumerAfterCommit)
 	err := cmd.Run()
 
 	killed := false
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
 			killed = ws.Signaled() && ws.Signal() == syscall.SIGKILL
 		}
