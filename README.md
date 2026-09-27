@@ -1,8 +1,8 @@
 # Jungle Wallet
 
 Serviço em Go, composto com Uber Fx, que movimenta carteiras de jogadores a partir de operações
-de provedores de jogos (`BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK`) recebidas por HTTP ou por uma
-fila SQS FIFO. O estado financeiro fica no PostgreSQL, os eventos de integração saem por uma
+de provedores de jogos (`BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK`) recebidas por HTTP ou por
+filas SQS FIFO, uma por provedor. O estado financeiro fica no PostgreSQL, os eventos de integração saem por uma
 outbox transacional para um tópico SNS FIFO e a autenticação é feita com tokens OIDC emitidos
 pelo Keycloak.
 
@@ -107,9 +107,8 @@ processo sai com código 2.
 | `AWS_ENDPOINT_URL` | — | Endpoint alternativo (LocalStack) |
 | `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE` | `/aws/credentials`, `wallet-consumer` no compose | Arquivo e perfil de credenciais gerados pelo `aws-init` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Alternativa às credenciais do arquivo, fora do compose |
-| `SQS_WAGER_QUEUE_URL` | obrigatória com `consumer` | Fila `wager-transactions.fifo` |
-| `SQS_WAGER_DLQ_URL` | obrigatória com `consumer` | Fila `wager-transactions-dlq.fifo` |
-| `SQS_ALLOWED_PROVIDERS` | obrigatória com `consumer` | Provedores aceitos na fila, separados por vírgula |
+| `SQS_PROVIDER_QUEUES` | obrigatória com `consumer` | Filas `providerId=url` separadas por vírgula; cada fila pertence a um único provedor |
+| `SQS_WAGER_DLQ_URL` | obrigatória com `consumer` | DLQ compartilhada `wager-transactions-dlq.fifo` |
 | `SQS_MAX_IN_FLIGHT` | `10` | Grupos de mensagens processados em paralelo |
 | `SQS_MESSAGE_TIMEOUT` | `30s` | Prazo de tratamento de uma mensagem (menor que o visibility timeout de 60 s) |
 | `SNS_EVENTS_TOPIC_ARN` | obrigatória com `outbox` | Tópico `wallet-events.fifo` |
@@ -142,16 +141,19 @@ Recursos criados pelo `deploy/aws/init-aws.sh`:
 
 | Recurso | Configuração |
 | --- | --- |
-| `wager-transactions.fifo` | FIFO, sem deduplicação por conteúdo, visibility timeout 60 s, long polling de 20 s, retenção de 4 dias, redrive para a DLQ com `maxReceiveCount` 5 |
-| `wager-transactions-dlq.fifo` | FIFO, retenção de 14 dias |
+| `wager-transactions-provider-a.fifo` | Fila FIFO do `provider-a`, sem deduplicação por conteúdo, visibility timeout 60 s, long polling de 20 s, retenção de 4 dias, redrive para a DLQ com `maxReceiveCount` 5 |
+| `wager-transactions-provider-b.fifo` | Igual à anterior, só para o `provider-b` |
+| `wager-transactions-dlq.fifo` | DLQ FIFO compartilhada, retenção de 14 dias |
 | `wallet-events.fifo` | Tópico SNS FIFO dos eventos de saída |
 | `wallet-events-audit.fifo` | Fila assinante do tópico (raw delivery), útil para inspecionar eventos |
-| Políticas IAM | `wallet-consumer` (consumir a fila, enviar à DLQ, publicar no tópico) e `provider-producer` (enviar à fila) |
+| Políticas IAM | `wallet-consumer` (consumir as duas filas, enviar à DLQ, publicar no tópico), `provider-a-producer` e `provider-b-producer` (enviar só à fila do próprio provedor) |
 | Usuários IAM | `wallet-consumer`, `provider-a-producer` e `provider-b-producer`, cada um com a política correspondente e uma chave de acesso nova a cada execução, gravada como perfil no volume `aws-credentials` (`/aws/credentials` nos containers da aplicação) |
 
-As instâncias `app-1` a `app-3` usam o perfil `wallet-consumer`. A LocalStack Community não
-avalia políticas IAM, então localmente as chaves identificam o chamador mas não restringem o
-acesso; numa conta AWS as mesmas políticas passam a ser aplicadas.
+As instâncias `app-1` a `app-3` usam o perfil `wallet-consumer`. O consumidor deriva o provedor
+da fila em que a mensagem chegou e rejeita um `providerId` do corpo que não coincida com ela.
+A LocalStack Community não avalia políticas IAM: localmente as chaves identificam o chamador,
+mas não restringem o acesso. O vínculo fila–provedor é o controle que a aplicação impõe. Numa
+conta AWS, a política de cada produtor é o controle do broker, que a LocalStack não executa.
 
 Clientes do realm `wallet` (todos `client_credentials`, segredos apenas locais):
 
@@ -248,8 +250,9 @@ curl -s $API/providers/provider-a/wagering/transactions/transaction-123 -H "Auth
 curl -s -X POST $API/wallets/$WALLET/reconciliation -H "Authorization: Bearer $BACKOFFICE"
 ```
 
-Enviar a mesma operação pela fila (o consumidor usa `data.idempotencyKey` e o `messageId` do
-envelope; o `MessageGroupId` usado nos testes é o `walletId`):
+Enviar a mesma operação pela fila do provedor (o `providerId` do corpo precisa ser o da fila; o
+consumidor usa `data.idempotencyKey` e o `messageId` do envelope; o `MessageGroupId` usado nos
+testes é o `walletId`):
 
 ```sh
 cat > /tmp/msg.json <<EOF
@@ -262,7 +265,7 @@ cat > /tmp/msg.json <<EOF
 EOF
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1 \
 aws --endpoint-url http://localhost:4566 sqs send-message \
-  --queue-url http://localhost:4566/000000000000/wager-transactions.fifo \
+  --queue-url http://localhost:4566/000000000000/wager-transactions-provider-a.fifo \
   --message-group-id "$WALLET" --message-deduplication-id msg-123 \
   --message-body file:///tmp/msg.json
 ```
@@ -370,7 +373,8 @@ Keycloak não produz sob demanda: chave desconhecida, issuer errado e claims arb
 
 O `TestMain` compila `cmd/wallet` com a build tag `faultinject` e os testes sobem várias
 instâncias do binário como processos independentes, cada uma com banco, filas e tópico
-próprios do teste. Cenários:
+próprios do teste. A fila de apostas do harness é vinculada explicitamente a `provider-a`
+(`SQS_PROVIDER_QUEUES`); as mensagens SQS desse harness usam esse provedor. Cenários:
 
 - mesma aposta enviada 50 vezes em paralelo para três instâncias gera um único débito;
 - apostas de 80.00, 80.00 e 100.00 disputando um saldo de 100.00 em três instâncias: exatamente

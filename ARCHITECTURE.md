@@ -11,7 +11,7 @@ componentes, e a variável `APP_ROLES` escolhe quais deles cada processo executa
 | Papel | Componente | Módulo Fx |
 | --- | --- | --- |
 | `api` | Servidor HTTP com autenticação OIDC | `wiring.API` |
-| `consumer` | Consumidor da fila `wager-transactions.fifo` | `wiring.Consumer` |
+| `consumer` | Consumidor das filas de aposta, uma por provedor | `wiring.Consumer` |
 | `outbox` | Relay da outbox para o tópico `wallet-events.fifo` | `wiring.Outbox` |
 | `pending` | Worker que retoma operações à espera de referência | `wiring.Pending` |
 
@@ -22,9 +22,12 @@ papéis. O compose sobe três instâncias com todos os papéis.
 ```mermaid
 flowchart LR
     P[Provedor] -- "HTTP + token OIDC" --> API
-    P -- "SendMessage" --> Q[(wager-transactions.fifo)]
-    Q --> C[consumer]
-    Q -. "maxReceiveCount 5" .-> DLQ[(wager-transactions-dlq.fifo)]
+    PA[provider-a] -- SendMessage --> QA[(wager-transactions-provider-a.fifo)]
+    PB[provider-b] -- SendMessage --> QB[(wager-transactions-provider-b.fifo)]
+    QA --> C[consumer]
+    QB --> C
+    QA -. "maxReceiveCount 5" .-> DLQ[(wager-transactions-dlq.fifo)]
+    QB -. "maxReceiveCount 5" .-> DLQ
     C -. "erro permanente" .-> DLQ
     KC[Keycloak] -. JWKS .-> API
     subgraph Instância
@@ -299,9 +302,9 @@ sequenceDiagram
 
 ## Consumidor SQS
 
-- Long polling de 20 s, até 10 mensagens por chamada. As mensagens são agrupadas por
-  `MessageGroupId` e cada grupo é processado em ordem numa goroutine; até `SQS_MAX_IN_FLIGHT`
-  grupos em paralelo.
+- Long polling de 20 s em cada fila de `SQS_PROVIDER_QUEUES`, até 10 mensagens por chamada. As
+  mensagens são agrupadas por `MessageGroupId` e cada grupo é processado em ordem numa goroutine;
+  até `SQS_MAX_IN_FLIGHT` grupos em paralelo, somando todas as filas.
 - `MessageGroupId`: os produtores usam o `walletId`, o que preserva a ordem por carteira.
   `MessageDeduplicationId`: definido pelo produtor (a fila não usa deduplicação por conteúdo). A
   deduplicação de 5 minutos do SQS é só uma otimização: a garantia vem da inbox e da
@@ -315,8 +318,12 @@ sequenceDiagram
   mensagem é apagada.
 - O hash da inbox cobre todos os campos enviados pelo produtor, incluindo a chave de
   idempotência, e exclui metadados de transporte.
-- Provedores aceitos na fila são limitados por `SQS_ALLOWED_PROVIDERS`; os demais vão para a
-  DLQ com `PROVIDER_NOT_ALLOWED`.
+- O provedor de uma mensagem é a fila em que ela chegou. Se o `providerId` do corpo for outro,
+  a mensagem vai para a DLQ com `PROVIDER_NOT_ALLOWED`. Atributos que o produtor possa definir
+  não escolhem o provedor. A política IAM de cada produtor só permite `SendMessage` na fila
+  dele; a LocalStack Community não avalia IAM, então o vínculo da fila é o que a aplicação
+  impõe, e o IAM é o controle do broker que a LocalStack não executa. As regras de domínio
+  continuam valendo depois dessa checagem.
 
 ### Retry e DLQ
 
@@ -415,13 +422,16 @@ valores monetários em strings decimais. Operações que terminam `FAILED` não 
   exigem o mesmo `provider_id`; na consulta por ID interno, uma transação de outro provedor
   responde `404`, sem revelar sua existência. Operações de carteira são restritas ao cliente
   interno `wallet-backoffice`, pois nenhum cliente de provedor recebe scopes `wallets:*`.
-- **Mensageria**: o script `init-aws.sh` cria as políticas `wallet-consumer` (consumir a fila,
-  enviar à DLQ, publicar no tópico) e `provider-producer` (apenas enviar à fila) e as associa
-  aos usuários `wallet-consumer`, `provider-a-producer` e `provider-b-producer`. Cada execução
-  troca as chaves de acesso desses usuários e grava um arquivo de credenciais compartilhado; as
-  instâncias da aplicação usam o perfil `wallet-consumer`. Cada política cobre só os recursos e
-  ações do papel. Além disso, o consumidor valida o provedor contra `SQS_ALLOWED_PROVIDERS` e
-  aplica todas as regras de domínio.
+- **Mensageria**: `init-aws.sh` cria uma fila FIFO por provedor
+  (`wager-transactions-provider-a.fifo` e `wager-transactions-provider-b.fifo`), a DLQ
+  compartilhada e as políticas `wallet-consumer` (consumir as duas filas, enviar à DLQ, publicar
+  no tópico), `provider-a-producer` e `provider-b-producer` (apenas `SendMessage` na fila do
+  próprio provedor). Elas ficam nos usuários de mesmo nome. Cada execução troca as chaves de
+  acesso desses usuários e grava um arquivo de credenciais compartilhado; as instâncias da
+  aplicação usam o perfil `wallet-consumer`. O consumidor aceita a mensagem só quando o
+  `providerId` do corpo é o da fila de origem e, em seguida, aplica as regras de domínio. A
+  LocalStack Community não avalia as políticas: o vínculo da fila é o controle da aplicação, e
+  o IAM é o controle do broker que a LocalStack não executa.
 
 ## Contrato HTTP
 

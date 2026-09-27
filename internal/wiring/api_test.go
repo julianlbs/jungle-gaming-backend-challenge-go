@@ -10,6 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/config"
 )
 
 func TestReadinessChecksFollowRoles(t *testing.T) {
@@ -47,11 +49,12 @@ func (f fakeTopic) GetTopicAttributes(context.Context, *sns.GetTopicAttributesIn
 
 func TestBrokerChecks(t *testing.T) {
 	q := &fakeQueue{}
-	if err := sqsCheck(q, "http://queue")(context.Background()); err != nil || aws.ToString(q.input.QueueUrl) != "http://queue" {
+	queues := []config.ProviderQueue{{ProviderID: "provider-a", URL: "http://queue"}}
+	if err := sqsCheck(q, queues)(context.Background()); err != nil || aws.ToString(q.input.QueueUrl) != "http://queue" {
 		t.Fatalf("err=%v input=%+v", err, q.input)
 	}
 	q.err = errors.New("down")
-	if err := sqsCheck(q, "http://queue")(context.Background()); err == nil {
+	if err := sqsCheck(q, queues)(context.Background()); err == nil {
 		t.Fatal("sqs failure not reported")
 	}
 	if err := snsCheck(fakeTopic{errors.New("down")}, "arn")(context.Background()); err == nil {

@@ -92,8 +92,9 @@ func message(t *testing.T, id, provider string, receives string) types.Message {
 }
 
 func newTestConsumer(api API, h Handler) *Consumer {
-	return New(api, h, Config{QueueURL: "q", DLQURL: "dlq", AllowedProviders: []string{"provider-a"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
+	return New(api, h, Config{
+		Queues: []Queue{{ProviderID: "provider-a", URL: "q"}}, DLQURL: "dlq",
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
 }
 
 func TestDecode(t *testing.T) {
@@ -125,7 +126,7 @@ func TestHandledMessagesAreDeleted(t *testing.T) {
 	api := newFakeSQS()
 	h := &fakeHandler{dup: map[string]bool{"m2": true}}
 	c := newTestConsumer(api, h)
-	c.handleGroup(context.Background(), []types.Message{message(t, "m1", "provider-a", "1"), message(t, "m2", "provider-a", "1")})
+	c.handleGroup(context.Background(), "q", []types.Message{message(t, "m1", "provider-a", "1"), message(t, "m2", "provider-a", "1")})
 	if len(api.deleted) != 2 {
 		t.Fatalf("deleted = %v", api.deleted)
 	}
@@ -135,7 +136,7 @@ func TestTransientFailureKeepsGroupOrder(t *testing.T) {
 	api := newFakeSQS()
 	h := &fakeHandler{results: map[string]error{"m1": app.ErrUnavailable}}
 	c := newTestConsumer(api, h)
-	c.handleGroup(context.Background(), []types.Message{message(t, "m1", "provider-a", "1"), message(t, "m2", "provider-a", "1")})
+	c.handleGroup(context.Background(), "q", []types.Message{message(t, "m1", "provider-a", "1"), message(t, "m2", "provider-a", "1")})
 	if len(api.deleted) != 0 || len(h.calls) != 1 {
 		t.Fatalf("deleted = %v, calls = %v", api.deleted, h.calls)
 	}
@@ -174,7 +175,7 @@ func TestPermanentFailuresAreDeadLettered(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			api := newFakeSQS()
 			c := newTestConsumer(api, &fakeHandler{results: map[string]error{"m1": tc.err}})
-			if !c.handle(context.Background(), tc.msg) {
+			if !c.handle(context.Background(), "q", tc.msg) {
 				t.Fatal("message should be settled")
 			}
 			if len(api.sent) != 1 || len(api.deleted) != 1 {
@@ -193,7 +194,7 @@ func TestDeadLetterFailureLeavesMessageForRedrive(t *testing.T) {
 	api := newFakeSQS()
 	api.sendErr = errors.New("dlq down")
 	c := newTestConsumer(api, &fakeHandler{results: map[string]error{"m1": app.ErrWalletNotFound}})
-	if c.handle(context.Background(), message(t, "m1", "provider-a", "3")) {
+	if c.handle(context.Background(), "q", message(t, "m1", "provider-a", "3")) {
 		t.Fatal("message should stay in the queue")
 	}
 	if len(api.deleted) != 0 || api.visibility["m1"] != 8 {
@@ -207,7 +208,7 @@ func TestShutdownReleasesUnstartedMessages(t *testing.T) {
 	c := newTestConsumer(api, h)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	c.handleGroup(ctx, []types.Message{message(t, "m1", "provider-a", "1")})
+	c.handleGroup(ctx, "q", []types.Message{message(t, "m1", "provider-a", "1")})
 	if len(h.calls) != 0 || api.visibility["m1"] != 0 {
 		t.Fatalf("calls = %v, visibility = %v", h.calls, api.visibility)
 	}
@@ -243,8 +244,42 @@ func TestHandlerContinuesProducerTrace(t *testing.T) {
 		"traceparent": {DataType: aws.String("String"), StringValue: aws.String(tp)},
 	}
 	h := &traceRecorder{}
-	newTestConsumer(newFakeSQS(), h).handleGroup(context.Background(), []types.Message{msg})
+	newTestConsumer(newFakeSQS(), h).handleGroup(context.Background(), "q", []types.Message{msg})
 	if h.traceParent != tp {
 		t.Fatalf("handler trace context = %q", h.traceParent)
+	}
+}
+
+func TestProviderComesFromTheQueue(t *testing.T) {
+	api := newFakeSQS()
+	h := &fakeHandler{}
+	c := New(api, h, Config{
+		Queues: []Queue{
+			{ProviderID: "provider-a", URL: "qa"},
+			{ProviderID: "provider-b", URL: "qb"},
+		},
+		DLQURL: "dlq",
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
+
+	foreign := message(t, "m1", "provider-b", "1")
+	foreign.MessageAttributes = map[string]types.MessageAttributeValue{
+		"providerId": {DataType: aws.String("String"), StringValue: aws.String("provider-a")},
+	}
+	if !c.handle(context.Background(), "qa", foreign) {
+		t.Fatal("foreign provider should be settled")
+	}
+	if len(h.calls) != 0 || len(api.sent) != 1 || len(api.deleted) != 1 {
+		t.Fatalf("calls = %v, sent = %d, deleted = %v", h.calls, len(api.sent), api.deleted)
+	}
+	in := api.sent[0]
+	if aws.ToString(in.QueueUrl) != "dlq" || aws.ToString(in.MessageAttributes["failureReason"].StringValue) != "PROVIDER_NOT_ALLOWED" {
+		t.Fatalf("dlq message = %+v", in)
+	}
+
+	if !c.handle(context.Background(), "qb", message(t, "m2", "provider-b", "1")) {
+		t.Fatal("provider-b on its queue should be handled")
+	}
+	if len(h.calls) != 1 || h.calls[0] != "m2" {
+		t.Fatalf("calls = %v", h.calls)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -37,23 +36,30 @@ type Handler interface {
 	Handle(ctx context.Context, msg app.IncomingWager) (app.IntakeResult, error)
 }
 
+// Queue is one wager FIFO queue bound to a single provider. The binding is the
+// queue the message was received from; senders cannot choose the provider.
+type Queue struct {
+	ProviderID string
+	URL        string
+}
+
 type Config struct {
-	QueueURL         string
-	DLQURL           string
-	AllowedProviders []string
-	MaxInFlight      int
+	Queues      []Queue
+	DLQURL      string
+	MaxInFlight int
 	// MessageTimeout bounds the handling of one message and must stay below the visibility timeout.
 	MessageTimeout time.Duration
 	WaitTime       time.Duration
 }
 
 type Consumer struct {
-	sqs     API
-	handler Handler
-	cfg     Config
-	log     *slog.Logger
-	metrics *metrics.Metrics
-	wg      sync.WaitGroup
+	sqs             API
+	handler         Handler
+	cfg             Config
+	providerByQueue map[string]string
+	log             *slog.Logger
+	metrics         *metrics.Metrics
+	wg              sync.WaitGroup
 }
 
 func New(api API, handler Handler, cfg Config, log *slog.Logger, m *metrics.Metrics) *Consumer {
@@ -66,17 +72,36 @@ func New(api API, handler Handler, cfg Config, log *slog.Logger, m *metrics.Metr
 	if cfg.WaitTime <= 0 || cfg.WaitTime > 20*time.Second {
 		cfg.WaitTime = 20 * time.Second
 	}
-	return &Consumer{sqs: api, handler: handler, cfg: cfg, log: log.With("worker", "sqs-consumer"), metrics: m}
+	byQueue := make(map[string]string, len(cfg.Queues))
+	for _, q := range cfg.Queues {
+		byQueue[q.URL] = q.ProviderID
+	}
+	return &Consumer{
+		sqs: api, handler: handler, cfg: cfg, providerByQueue: byQueue,
+		log: log.With("worker", "sqs-consumer"), metrics: m,
+	}
 }
 
-// Run polls until ctx is cancelled, then waits for the messages already started.
+// Run polls every bound queue until ctx is cancelled, then waits for the messages already started.
 func (c *Consumer) Run(ctx context.Context) {
-	defer c.wg.Wait()
 	sem := make(chan struct{}, c.cfg.MaxInFlight)
+	var pollers sync.WaitGroup
+	for _, q := range c.cfg.Queues {
+		pollers.Add(1)
+		go func(queueURL string) {
+			defer pollers.Done()
+			c.poll(ctx, queueURL, sem)
+		}(q.URL)
+	}
+	pollers.Wait()
+	c.wg.Wait()
+}
+
+func (c *Consumer) poll(ctx context.Context, queueURL string, sem chan struct{}) {
 	failures := 0
 	for ctx.Err() == nil {
 		out, err := c.sqs.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl:              aws.String(c.cfg.QueueURL),
+			QueueUrl:              aws.String(queueURL),
 			MaxNumberOfMessages:   10,
 			WaitTimeSeconds:       int32(c.cfg.WaitTime / time.Second),
 			MessageAttributeNames: traceAttributes,
@@ -91,7 +116,7 @@ func (c *Consumer) Run(ctx context.Context) {
 			}
 			failures++
 			delay := min(time.Duration(1<<min(failures, 5))*time.Second, 30*time.Second)
-			c.log.Warn("receive failed", "error", err, "retryIn", delay.String())
+			c.log.Warn("receive failed", "queueUrl", queueURL, "error", err, "retryIn", delay.String())
 			sleep(ctx, delay)
 			continue
 		}
@@ -100,35 +125,35 @@ func (c *Consumer) Run(ctx context.Context) {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				c.release(group)
+				c.release(queueURL, group)
 				continue
 			}
 			c.wg.Add(1)
-			go func() {
+			go func(group []types.Message) {
 				defer func() { <-sem; c.wg.Done() }()
-				c.handleGroup(ctx, group)
-			}()
+				c.handleGroup(ctx, queueURL, group)
+			}(group)
 		}
 	}
 }
 
 // handleGroup processes messages sharing a MessageGroupId in delivery order. After a message
 // is left for redelivery, the rest of the group is released so that order is kept.
-func (c *Consumer) handleGroup(ctx context.Context, group []types.Message) {
+func (c *Consumer) handleGroup(ctx context.Context, queueURL string, group []types.Message) {
 	for i, msg := range group {
 		if ctx.Err() != nil {
-			c.release(group[i:])
+			c.release(queueURL, group[i:])
 			return
 		}
-		if !c.handle(ctx, msg) {
-			c.release(group[i+1:])
+		if !c.handle(ctx, queueURL, msg) {
+			c.release(queueURL, group[i+1:])
 			return
 		}
 	}
 }
 
 // handle returns false when the message stays in the queue for another attempt.
-func (c *Consumer) handle(parent context.Context, msg types.Message) (done bool) {
+func (c *Consumer) handle(parent context.Context, queueURL string, msg types.Message) (done bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), c.cfg.MessageTimeout)
 	defer cancel()
 	ctx, span := tracer.Start(tracing.Extract(ctx, traceCarrier(msg)), "sqs.process "+ConsumerName,
@@ -145,17 +170,18 @@ func (c *Consumer) handle(parent context.Context, msg types.Message) (done bool)
 	env, cmd, err := decode(aws.ToString(msg.Body))
 	if err == nil {
 		ctx = logging.With(ctx, logging.KeyCorrelationID, cmd.CorrelationID, logging.KeyProviderID, cmd.ProviderID)
-		if !slices.Contains(c.cfg.AllowedProviders, cmd.ProviderID) {
+		// The provider is whichever queue delivered the message. Message attributes are ignored.
+		if cmd.ProviderID == "" || cmd.ProviderID != c.providerByQueue[queueURL] {
 			err = errProviderNotAllowed
 		}
 	}
 	if err != nil {
-		return c.fail(ctx, msg, err)
+		return c.fail(ctx, queueURL, msg, err)
 	}
 
 	res, err := c.handler.Handle(ctx, app.IncomingWager{Consumer: ConsumerName, MessageID: env.MessageID, Command: cmd})
 	if err != nil {
-		return c.fail(ctx, msg, err)
+		return c.fail(ctx, queueURL, msg, err)
 	}
 	outcome := string(res.Entry.Outcome)
 	if res.Duplicate {
@@ -165,15 +191,15 @@ func (c *Consumer) handle(parent context.Context, msg types.Message) (done bool)
 	ctx = logging.With(ctx, logging.KeyTransactionID, res.Entry.TransactionID.String())
 	c.log.InfoContext(ctx, "message handled", "outcome", outcome)
 	c.metrics.SQSMessages.WithLabelValues(outcome).Inc()
-	c.delete(ctx, msg)
+	c.delete(ctx, queueURL, msg)
 	return true
 }
 
 var errProviderNotAllowed = errors.New("provider not allowed on this queue")
 
-func (c *Consumer) delete(ctx context.Context, msg types.Message) {
+func (c *Consumer) delete(ctx context.Context, queueURL string, msg types.Message) {
 	if _, err := c.sqs.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-		QueueUrl: aws.String(c.cfg.QueueURL), ReceiptHandle: msg.ReceiptHandle,
+		QueueUrl: aws.String(queueURL), ReceiptHandle: msg.ReceiptHandle,
 	}); err != nil {
 		// The inbox makes the redelivery a no-op.
 		c.log.WarnContext(ctx, "delete failed", "error", err)
@@ -181,15 +207,15 @@ func (c *Consumer) delete(ctx context.Context, msg types.Message) {
 }
 
 // release makes messages visible again immediately.
-func (c *Consumer) release(msgs []types.Message) {
-	c.setVisibility(msgs, 0)
+func (c *Consumer) release(queueURL string, msgs []types.Message) {
+	c.setVisibility(queueURL, msgs, 0)
 }
 
-func (c *Consumer) setVisibility(msgs []types.Message, timeout time.Duration) {
+func (c *Consumer) setVisibility(queueURL string, msgs []types.Message, timeout time.Duration) {
 	for _, m := range msgs {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, err := c.sqs.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
-			QueueUrl: aws.String(c.cfg.QueueURL), ReceiptHandle: m.ReceiptHandle,
+			QueueUrl: aws.String(queueURL), ReceiptHandle: m.ReceiptHandle,
 			VisibilityTimeout: int32(timeout / time.Second),
 		})
 		cancel()

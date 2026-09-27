@@ -9,14 +9,13 @@ import (
 
 func env(overrides map[string]string) func(string) (string, bool) {
 	base := map[string]string{
-		"DATABASE_URL":          "postgres://wallet_app:x@localhost:5432/wallet",
-		"OIDC_ISSUER":           "http://localhost:8080/realms/wallet",
-		"OIDC_JWKS_URL":         "http://keycloak:8080/realms/wallet/protocol/openid-connect/certs",
-		"OIDC_AUDIENCE":         "wallet-api",
-		"SQS_WAGER_QUEUE_URL":   "http://localstack:4566/000000000000/wager-transactions.fifo",
-		"SQS_WAGER_DLQ_URL":     "http://localstack:4566/000000000000/wager-transactions-dlq.fifo",
-		"SQS_ALLOWED_PROVIDERS": "provider-a, provider-b,provider-a",
-		"SNS_EVENTS_TOPIC_ARN":  "arn:aws:sns:us-east-1:000000000000:wallet-events.fifo",
+		"DATABASE_URL":         "postgres://wallet_app:x@localhost:5432/wallet",
+		"OIDC_ISSUER":          "http://localhost:8080/realms/wallet",
+		"OIDC_JWKS_URL":        "http://keycloak:8080/realms/wallet/protocol/openid-connect/certs",
+		"OIDC_AUDIENCE":        "wallet-api",
+		"SQS_PROVIDER_QUEUES":  "provider-a=http://localstack:4566/000000000000/wager-transactions-provider-a.fifo, provider-b=http://localstack:4566/000000000000/wager-transactions-provider-b.fifo",
+		"SQS_WAGER_DLQ_URL":    "http://localstack:4566/000000000000/wager-transactions-dlq.fifo",
+		"SNS_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:wallet-events.fifo",
 	}
 	for k, v := range overrides {
 		if v == "<unset>" {
@@ -47,8 +46,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Postgres.MaxConns != 20 || cfg.Postgres.LockTimeout != 2*time.Second {
 		t.Errorf("postgres: %+v", cfg.Postgres)
 	}
-	if strings.Join(cfg.SQS.AllowedProviders, ",") != "provider-a,provider-b" {
-		t.Errorf("allowed providers: %v", cfg.SQS.AllowedProviders)
+	if len(cfg.SQS.Queues) != 2 || cfg.SQS.Queues[0].ProviderID != "provider-a" ||
+		cfg.SQS.Queues[1].ProviderID != "provider-b" || cfg.SQS.Queues[0].URL == cfg.SQS.Queues[1].URL {
+		t.Errorf("provider queues: %+v", cfg.SQS.Queues)
 	}
 	if cfg.Pending.TTL != 30*time.Minute || cfg.Pending.MaxAttempts != 10 || cfg.InstanceID == "" {
 		t.Errorf("pending/instance: %+v %q", cfg.Pending, cfg.InstanceID)
@@ -98,7 +98,7 @@ func TestRoleScopedRequirements(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
 		"APP_ROLES":            "pending",
 		"OIDC_ISSUER":          "<unset>",
-		"SQS_WAGER_QUEUE_URL":  "<unset>",
+		"SQS_PROVIDER_QUEUES":  "<unset>",
 		"SNS_EVENTS_TOPIC_ARN": "<unset>",
 	}))
 	if err != nil {
@@ -145,10 +145,22 @@ func TestLoadReportsEveryProblem(t *testing.T) {
 	}
 }
 
-func TestConsumerNeedsAllowedProviders(t *testing.T) {
-	_, err := Load(env(map[string]string{"APP_ROLES": "consumer", "SQS_ALLOWED_PROVIDERS": " , "}))
-	if err == nil || !strings.Contains(err.Error(), "SQS_ALLOWED_PROVIDERS") {
-		t.Fatalf("err = %v", err)
+func TestConsumerNeedsProviderQueues(t *testing.T) {
+	cases := map[string]string{
+		"empty":      " , ",
+		"missing":    "<unset>",
+		"no url":     "provider-a",
+		"bad url":    "provider-a=not-a-url",
+		"duplicate":  "provider-a=http://localstack:4566/000000000000/q.fifo,provider-a=http://localstack:4566/000000000000/other.fifo",
+		"same queue": "provider-a=http://localstack:4566/000000000000/q.fifo,provider-b=http://localstack:4566/000000000000/q.fifo",
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(env(map[string]string{"APP_ROLES": "consumer", "SQS_PROVIDER_QUEUES": raw}))
+			if err == nil || !strings.Contains(err.Error(), "SQS_PROVIDER_QUEUES") {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }
 

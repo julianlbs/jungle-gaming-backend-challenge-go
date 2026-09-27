@@ -156,12 +156,15 @@ func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.Pend
 
 func registerConsumer(lc fx.Lifecycle, cfg config.Config, client *sqs.Client, intake *app.WagerIntake,
 	log *slog.Logger, m *metrics.Metrics) {
+	queues := make([]sqsconsumer.Queue, len(cfg.SQS.Queues))
+	for i, q := range cfg.SQS.Queues {
+		queues[i] = sqsconsumer.Queue{ProviderID: q.ProviderID, URL: q.URL}
+	}
 	c := sqsconsumer.New(client, faultyHandler{intake}, sqsconsumer.Config{
-		QueueURL:         cfg.SQS.QueueURL,
-		DLQURL:           cfg.SQS.DLQURL,
-		AllowedProviders: cfg.SQS.AllowedProviders,
-		MaxInFlight:      cfg.SQS.MaxInFlight,
-		MessageTimeout:   cfg.SQS.MessageTimeout,
+		Queues:         queues,
+		DLQURL:         cfg.SQS.DLQURL,
+		MaxInFlight:    cfg.SQS.MaxInFlight,
+		MessageTimeout: cfg.SQS.MessageTimeout,
 	}, log, m)
 	lifecycle.Register(lc, log, "sqs-consumer", c.Run)
 }

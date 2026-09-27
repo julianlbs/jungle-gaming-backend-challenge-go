@@ -169,9 +169,9 @@ func newCluster(t *testing.T) *cluster {
 		"AWS_ENDPOINT_URL":      env.awsEndpoint,
 		"AWS_ACCESS_KEY_ID":     "test",
 		"AWS_SECRET_ACCESS_KEY": "test",
-		"SQS_WAGER_QUEUE_URL":   c.queue,
+		// The harness queue is trusted as provider-a. HTTP still exercises provider-b.
+		"SQS_PROVIDER_QUEUES":   "provider-a=" + c.queue,
 		"SQS_WAGER_DLQ_URL":     c.dlq,
-		"SQS_ALLOWED_PROVIDERS": "provider-a,provider-b",
 		"SQS_MESSAGE_TIMEOUT":   "4s",
 		"SNS_EVENTS_TOPIC_ARN":  c.topic,
 		"OUTBOX_POLL_INTERVAL":  "100ms",

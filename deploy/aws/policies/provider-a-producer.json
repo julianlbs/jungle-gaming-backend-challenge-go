@@ -2,10 +2,10 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "SendWagerTransactions",
+      "Sid": "SendProviderAWagers",
       "Effect": "Allow",
       "Action": ["sqs:SendMessage", "sqs:GetQueueUrl", "sqs:GetQueueAttributes"],
-      "Resource": "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions.fifo"
+      "Resource": "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions-provider-a.fifo"
     }
   ]
 }

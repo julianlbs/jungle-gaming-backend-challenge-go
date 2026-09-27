@@ -65,12 +65,18 @@ type AWS struct {
 	EndpointURL string
 }
 
+// ProviderQueue binds one FIFO queue to one provider. The consumer trusts the queue,
+// not the message body, for the provider id.
+type ProviderQueue struct {
+	ProviderID string
+	URL        string
+}
+
 type SQS struct {
-	QueueURL         string
-	DLQURL           string
-	AllowedProviders []string
-	MaxInFlight      int
-	MessageTimeout   time.Duration
+	Queues         []ProviderQueue
+	DLQURL         string
+	MaxInFlight    int
+	MessageTimeout time.Duration
 }
 
 type SNS struct {
@@ -161,14 +167,10 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if cfg.Roles.Has(RoleConsumer) {
 		cfg.SQS = SQS{
-			QueueURL:         r.requiredURL("SQS_WAGER_QUEUE_URL"),
-			DLQURL:           r.requiredURL("SQS_WAGER_DLQ_URL"),
-			AllowedProviders: r.list("SQS_ALLOWED_PROVIDERS"),
-			MaxInFlight:      r.positive("SQS_MAX_IN_FLIGHT", "10", 100),
-			MessageTimeout:   r.duration("SQS_MESSAGE_TIMEOUT", "30s", time.Second, 10*time.Minute),
-		}
-		if len(cfg.SQS.AllowedProviders) == 0 {
-			r.fail("SQS_ALLOWED_PROVIDERS", "must list at least one provider")
+			Queues:         r.providerQueues("SQS_PROVIDER_QUEUES"),
+			DLQURL:         r.requiredURL("SQS_WAGER_DLQ_URL"),
+			MaxInFlight:    r.positive("SQS_MAX_IN_FLIGHT", "10", 100),
+			MessageTimeout: r.duration("SQS_MESSAGE_TIMEOUT", "30s", time.Second, 10*time.Minute),
 		}
 	}
 	if cfg.Roles.Has(RoleOutbox) {
@@ -286,6 +288,49 @@ func (r *reader) level(key, fallback string) slog.Level {
 		return slog.LevelInfo
 	}
 	return l
+}
+
+// providerQueues parses "provider-a=https://sqs/a,provider-b=https://sqs/b".
+func (r *reader) providerQueues(key string) []ProviderQueue {
+	raw := r.str(key, "")
+	if strings.TrimSpace(raw) == "" {
+		r.fail(key, "must list at least one provider queue as providerId=url")
+		return nil
+	}
+	var out []ProviderQueue
+	providers := map[string]struct{}{}
+	urls := map[string]struct{}{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		provider, queueURL, ok := strings.Cut(part, "=")
+		provider, queueURL = strings.TrimSpace(provider), strings.TrimSpace(queueURL)
+		switch {
+		case !ok || provider == "" || !validURL(queueURL):
+			r.fail(key, "must be providerId=url entries separated by commas")
+			continue
+		case hasKey(providers, provider):
+			r.fail(key, fmt.Sprintf("repeats provider %q", provider))
+			continue
+		case hasKey(urls, queueURL):
+			r.fail(key, "binds one queue to more than one provider")
+			continue
+		}
+		providers[provider] = struct{}{}
+		urls[queueURL] = struct{}{}
+		out = append(out, ProviderQueue{ProviderID: provider, URL: queueURL})
+	}
+	if len(out) == 0 {
+		r.fail(key, "must list at least one provider queue as providerId=url")
+	}
+	return out
+}
+
+func hasKey(m map[string]struct{}, key string) bool {
+	_, ok := m[key]
+	return ok
 }
 
 func (r *reader) list(key string) []string {

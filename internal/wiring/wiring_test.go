@@ -20,11 +20,10 @@ func testConfig(t *testing.T, roles string) config.Config {
 			"OIDC_JWKS_URL": "http://keycloak:8080/realms/wallet/protocol/openid-connect/certs",
 			"OIDC_AUDIENCE": "wallet-api",
 
-			"AWS_REGION":            "us-east-1",
-			"SQS_WAGER_QUEUE_URL":   "http://localstack:4566/000000000000/wager-transactions.fifo",
-			"SQS_WAGER_DLQ_URL":     "http://localstack:4566/000000000000/wager-transactions-dlq.fifo",
-			"SQS_ALLOWED_PROVIDERS": "provider-a",
-			"SNS_EVENTS_TOPIC_ARN":  "arn:aws:sns:us-east-1:000000000000:wallet-events.fifo",
+			"AWS_REGION":           "us-east-1",
+			"SQS_PROVIDER_QUEUES":  "provider-a=http://localstack:4566/000000000000/wager-transactions-provider-a.fifo",
+			"SQS_WAGER_DLQ_URL":    "http://localstack:4566/000000000000/wager-transactions-dlq.fifo",
+			"SNS_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:wallet-events.fifo",
 		}[k]
 		return v, ok
 	})

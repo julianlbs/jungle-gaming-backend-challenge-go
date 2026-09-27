@@ -47,7 +47,7 @@ type readinessDeps struct {
 func newReadiness(d readinessDeps) *httpapi.Readiness {
 	checks := []httpapi.ReadinessCheck{{Name: "database", Check: d.Pool.Ping}}
 	if d.Cfg.Roles.Has(config.RoleConsumer) && d.SQS != nil {
-		checks = append(checks, httpapi.ReadinessCheck{Name: "sqs", Check: sqsCheck(d.SQS, d.Cfg.SQS.QueueURL)})
+		checks = append(checks, httpapi.ReadinessCheck{Name: "sqs", Check: sqsCheck(d.SQS, d.Cfg.SQS.Queues)})
 	}
 	if d.Cfg.Roles.Has(config.RoleOutbox) && d.SNS != nil {
 		checks = append(checks, httpapi.ReadinessCheck{Name: "sns", Check: snsCheck(d.SNS, d.Cfg.SNS.TopicARN)})
@@ -63,13 +63,17 @@ type topicAttributesAPI interface {
 	GetTopicAttributes(context.Context, *sns.GetTopicAttributesInput, ...func(*sns.Options)) (*sns.GetTopicAttributesOutput, error)
 }
 
-func sqsCheck(c queueAttributesAPI, queueURL string) func(context.Context) error {
+func sqsCheck(c queueAttributesAPI, queues []config.ProviderQueue) func(context.Context) error {
 	return func(ctx context.Context) error {
-		_, err := c.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-			QueueUrl:       aws.String(queueURL),
-			AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
-		}, withoutRetries)
-		return err
+		for _, q := range queues {
+			if _, err := c.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+				QueueUrl:       aws.String(q.URL),
+				AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
+			}, withoutRetries); err != nil {
+				return fmt.Errorf("%s: %w", q.ProviderID, err)
+			}
+		}
+		return nil
 	}
 }
 

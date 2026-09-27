@@ -38,22 +38,21 @@ func TestApplicationStartsAndShutsDownGracefully(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	httpAddr := freeAddr(t)
 	vars := map[string]string{
-		"APP_ROLES":             "api,consumer,outbox,pending",
-		"INSTANCE_ID":           "lifecycle-test",
-		"HTTP_ADDR":             httpAddr,
-		"METRICS_ADDR":          freeAddr(t),
-		"LOG_LEVEL":             "error",
-		"SHUTDOWN_TIMEOUT":      "15s",
-		"DATABASE_URL":          withDatabase(env.appURL, f.db.Name),
-		"OIDC_ISSUER":           authtest.Issuer,
-		"OIDC_JWKS_URL":         issuer.JWKSURL(),
-		"OIDC_AUDIENCE":         authtest.Audience,
-		"AWS_ENDPOINT_URL":      getenv("TEST_AWS_ENDPOINT_URL", "http://localhost:4566"),
-		"SQS_WAGER_QUEUE_URL":   queue,
-		"SQS_WAGER_DLQ_URL":     dlq,
-		"SQS_ALLOWED_PROVIDERS": "provider-a",
-		"SNS_EVENTS_TOPIC_ARN":  topic,
-		"OUTBOX_POLL_INTERVAL":  "50ms",
+		"APP_ROLES":            "api,consumer,outbox,pending",
+		"INSTANCE_ID":          "lifecycle-test",
+		"HTTP_ADDR":            httpAddr,
+		"METRICS_ADDR":         freeAddr(t),
+		"LOG_LEVEL":            "error",
+		"SHUTDOWN_TIMEOUT":     "15s",
+		"DATABASE_URL":         withDatabase(env.appURL, f.db.Name),
+		"OIDC_ISSUER":          authtest.Issuer,
+		"OIDC_JWKS_URL":        issuer.JWKSURL(),
+		"OIDC_AUDIENCE":        authtest.Audience,
+		"AWS_ENDPOINT_URL":     getenv("TEST_AWS_ENDPOINT_URL", "http://localhost:4566"),
+		"SQS_PROVIDER_QUEUES":  "provider-a=" + queue,
+		"SQS_WAGER_DLQ_URL":    dlq,
+		"SNS_EVENTS_TOPIC_ARN": topic,
+		"OUTBOX_POLL_INTERVAL": "50ms",
 	}
 	cfg, err := config.Load(func(k string) (string, bool) { v, ok := vars[k]; return v, ok })
 	if err != nil {
@@ -120,19 +119,18 @@ func TestReadinessFailsWhenTheWagerQueueIsMissing(t *testing.T) {
 	httpAddr := freeAddr(t)
 	endpoint := getenv("TEST_AWS_ENDPOINT_URL", "http://localhost:4566")
 	vars := map[string]string{
-		"APP_ROLES":             "api,consumer",
-		"INSTANCE_ID":           "readiness-test",
-		"HTTP_ADDR":             httpAddr,
-		"METRICS_ADDR":          freeAddr(t),
-		"LOG_LEVEL":             "error",
-		"DATABASE_URL":          withDatabase(env.appURL, f.db.Name),
-		"OIDC_ISSUER":           authtest.Issuer,
-		"OIDC_JWKS_URL":         issuer.JWKSURL(),
-		"OIDC_AUDIENCE":         authtest.Audience,
-		"AWS_ENDPOINT_URL":      endpoint,
-		"SQS_WAGER_QUEUE_URL":   endpoint + "/000000000000/missing-" + f.db.Name + ".fifo",
-		"SQS_WAGER_DLQ_URL":     dlq,
-		"SQS_ALLOWED_PROVIDERS": "provider-a",
+		"APP_ROLES":           "api,consumer",
+		"INSTANCE_ID":         "readiness-test",
+		"HTTP_ADDR":           httpAddr,
+		"METRICS_ADDR":        freeAddr(t),
+		"LOG_LEVEL":           "error",
+		"DATABASE_URL":        withDatabase(env.appURL, f.db.Name),
+		"OIDC_ISSUER":         authtest.Issuer,
+		"OIDC_JWKS_URL":       issuer.JWKSURL(),
+		"OIDC_AUDIENCE":       authtest.Audience,
+		"AWS_ENDPOINT_URL":    endpoint,
+		"SQS_PROVIDER_QUEUES": "provider-a=" + endpoint + "/000000000000/missing-" + f.db.Name + ".fifo",
+		"SQS_WAGER_DLQ_URL":   dlq,
 	}
 	cfg, err := config.Load(func(k string) (string, bool) { v, ok := vars[k]; return v, ok })
 	if err != nil {

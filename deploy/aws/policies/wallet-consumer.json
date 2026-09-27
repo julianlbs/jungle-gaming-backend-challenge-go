@@ -11,7 +11,10 @@
         "sqs:GetQueueAttributes",
         "sqs:GetQueueUrl"
       ],
-      "Resource": "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions.fifo"
+      "Resource": [
+        "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions-provider-a.fifo",
+        "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:wager-transactions-provider-b.fifo"
+      ]
     },
     {
       "Sid": "DeadLetterInvalidMessages",

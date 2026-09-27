@@ -26,9 +26,13 @@ var quietLog = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func startConsumer(t *testing.T, a awsClients, h sqsconsumer.Handler, queueURL, dlqURL string) {
 	t.Helper()
+	// This queue is bound to provider-a. Production uses one queue per provider.
 	c := sqsconsumer.New(a.sqs, h, sqsconsumer.Config{
-		QueueURL: queueURL, DLQURL: dlqURL, AllowedProviders: []string{"provider-a"},
-		MaxInFlight: 4, MessageTimeout: 10 * time.Second, WaitTime: time.Second,
+		Queues:         []sqsconsumer.Queue{{ProviderID: "provider-a", URL: queueURL}},
+		DLQURL:         dlqURL,
+		MaxInFlight:    4,
+		MessageTimeout: 10 * time.Second,
+		WaitTime:       time.Second,
 	}, quietLog, metrics.New())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

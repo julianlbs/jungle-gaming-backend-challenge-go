@@ -53,26 +53,26 @@ func retryDelay(receiveCount int) time.Duration {
 
 // fail routes a message that was not handled. It returns false when the message stays in the
 // queue, which also holds back the rest of its group.
-func (c *Consumer) fail(ctx context.Context, msg types.Message, err error) bool {
+func (c *Consumer) fail(ctx context.Context, queueURL string, msg types.Message, err error) bool {
 	count := receiveCount(msg)
 	if reason := failureReason(err); reason != "" {
 		if dlqErr := c.deadLetter(ctx, msg, reason, err); dlqErr != nil {
 			c.log.ErrorContext(ctx, "dead-letter failed, message left for redrive",
 				"reason", reason, "error", err, "dlqError", dlqErr)
-			c.setVisibility([]types.Message{msg}, retryDelay(count))
+			c.setVisibility(queueURL, []types.Message{msg}, retryDelay(count))
 			return false
 		}
 		c.log.WarnContext(ctx, "message dead-lettered", "reason", reason, "error", err)
 		c.metrics.SQSDeadLettered.WithLabelValues(reason).Inc()
 		c.metrics.SQSMessages.WithLabelValues("DEAD_LETTERED").Inc()
-		c.delete(ctx, msg)
+		c.delete(ctx, queueURL, msg)
 		return true
 	}
 	delay := retryDelay(count)
 	c.log.WarnContext(ctx, "message will be retried", "error", err, "receiveCount", count, "retryIn", delay.String())
 	c.metrics.SQSRetries.Inc()
 	c.metrics.SQSMessages.WithLabelValues("RETRY").Inc()
-	c.setVisibility([]types.Message{msg}, delay)
+	c.setVisibility(queueURL, []types.Message{msg}, delay)
 	return false
 }
 
