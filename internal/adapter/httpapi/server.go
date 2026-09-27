@@ -51,6 +51,7 @@ func NewAPI(d Deps) *API {
 		writeProblem(w, r, problemNotFound)
 	})
 	a.registerWalletRoutes()
+	a.registerWageringRoutes()
 	return a
 }
 
