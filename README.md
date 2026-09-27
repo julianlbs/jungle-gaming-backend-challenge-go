@@ -315,9 +315,15 @@ Rodam contra PostgreSQL, Keycloak e LocalStack reais. Cada teste recebe um banco
 clonado de um template migrado. Cobrem migrations (subida e reversão), constraints e triggers de
 proteção do ledger, repositórios, casos de uso (abertura, cinco tipos de operação, reversões,
 pendências, consultas), concorrência na mesma carteira (duas apostas de 80.00 sobre 100.00:
-uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00 e um único débito no ledger), inbox, outbox concorrente, API HTTP com
-tokens reais do Keycloak (credenciais ausentes, inválidas e expiradas, isolamento entre
-provedores), SQS/SNS com DLQ e o ciclo de vida Fx.
+uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00 e um único débito no ledger), inbox, outbox concorrente, API HTTP,
+SQS/SNS com DLQ, readiness e o ciclo de vida Fx.
+
+A autenticação é coberta de duas formas. `TestKeycloakCredentials` obtém tokens reais do
+Keycloak por client credentials e verifica credenciais ausentes, com assinatura adulterada,
+malformadas, expiradas (cliente `provider-a-short-lived`, tokens de 2 s) e de outra audiência
+(`unrelated-service`), além de escopo insuficiente e isolamento entre provedores. Os demais
+testes HTTP usam um emissor em processo (`internal/adapter/auth/authtest`) para casos que o
+Keycloak não produz sob demanda: chave desconhecida, issuer errado e claims arbitrários.
 
 ### Múltiplos processos e falhas (`-tags=e2e`)
 
