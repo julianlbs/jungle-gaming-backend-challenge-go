@@ -75,6 +75,56 @@ func TestRefundBeforeBetIsAppliedWhenBetArrives(t *testing.T) {
 	requireOutcome(t, replay, err, wagering.StatusProcessed, "100.00", true)
 }
 
+func TestPendingPermanentFailureDoesNotMoveMoney(t *testing.T) {
+	f, resumer := newPendingFixture(t)
+	ctx := context.Background()
+	w := f.openWallet(t, "100.00")
+
+	refund := wager(w, "REFUND", "10.00", "refund-early")
+	refund.ReferenceExternalTransactionID = "bet-late"
+	out, err := f.processor.Process(ctx, refund)
+	requireOutcome(t, out, err, wagering.StatusPendingReference, "", false)
+	bet, err := f.processor.Process(ctx, wager(w, "BET", "10.00", "bet-late"))
+	requireOutcome(t, bet, err, wagering.StatusProcessed, "90.00", false)
+	// Fills the balance up to the largest representable amount so that crediting the refund overflows.
+	win := wager(w, "WIN", "92233720368547668.07", "win-max")
+	win.ReferenceExternalTransactionID = "bet-late"
+	full, err := f.processor.Process(ctx, win)
+	requireOutcome(t, full, err, wagering.StatusProcessed, "92233720368547758.07", false)
+
+	ledger := func() int {
+		return countRows(t, f.db, `SELECT count(*) FROM wallet_ledger_entries WHERE wallet_id = $1`, w.ID().UUID())
+	}
+	before := ledger()
+	done := drainUntil(t, f, resumer, out.Transaction.ID())
+	if done.Status() != wagering.StatusFailed || done.FailureCode() != wagering.FailureProcessingFailed {
+		t.Fatalf("got %s %s", done.Status(), done.FailureCode())
+	}
+	if n := countRows(t, f.db, `SELECT count(*) FROM wager_transactions WHERE id = $1 AND status = 'FAILED'`, out.Transaction.ID().UUID()); n != 1 {
+		t.Fatal("failure not persisted")
+	}
+	if got := f.balance(t, w); got != "92233720368547758.07" {
+		t.Fatalf("balance = %s", got)
+	}
+	if n := ledger(); n != before {
+		t.Fatalf("ledger entries %d -> %d", before, n)
+	}
+
+	if _, err := resumer.RunOnce(ctx, time.Second, 10); err != nil {
+		t.Fatal(err)
+	}
+	after, err := postgres.NewTransactionRepository(f.db.App).Get(ctx, out.Transaction.ID())
+	if err != nil || after.Status() != wagering.StatusFailed {
+		t.Fatalf("after another pass: %v %v", after.Status(), err)
+	}
+	if n := ledger(); n != before {
+		t.Fatalf("another pass wrote ledger entries: %d -> %d", before, n)
+	}
+	if got := f.balance(t, w); got != "92233720368547758.07" {
+		t.Fatalf("balance after another pass = %s", got)
+	}
+}
+
 func TestPendingReferenceExpires(t *testing.T) {
 	f, resumer := newPendingFixture(t)
 	ctx := context.Background()
