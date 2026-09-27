@@ -21,7 +21,7 @@ func newPendingFixture(t *testing.T) (*appFixture, *app.PendingResumer) {
 	store := postgres.NewPendingStore(f.db.App)
 	policy := fastPendingPolicy()
 	f.processor = app.NewWagerProcessor(f.db.UoW, app.SystemClock{}, app.TimeOrderedIDs{}, policy, store)
-	return f, app.NewPendingResumer(f.db.UoW, store, app.SystemClock{}, app.TimeOrderedIDs{}, policy, store)
+	return f, app.NewPendingResumer(f.db.UoW, store, app.SystemClock{}, app.TimeOrderedIDs{}, policy, store, nil)
 }
 
 // drainUntil runs the resumer until the transaction leaves PENDING_REFERENCE.
@@ -99,6 +99,9 @@ func TestPendingPermanentFailureDoesNotMoveMoney(t *testing.T) {
 	done := drainUntil(t, f, resumer, out.Transaction.ID())
 	if done.Status() != wagering.StatusFailed || done.FailureCode() != wagering.FailureProcessingFailed {
 		t.Fatalf("got %s %s", done.Status(), done.FailureCode())
+	}
+	if got := done.FailureDetail(); got != "processing failed" {
+		t.Fatalf("failureDetail = %q", got)
 	}
 	if n := countRows(t, f.db, `SELECT count(*) FROM wager_transactions WHERE id = $1 AND status = 'FAILED'`, out.Transaction.ID().UUID()); n != 1 {
 		t.Fatal("failure not persisted")

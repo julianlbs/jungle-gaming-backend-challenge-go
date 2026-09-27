@@ -251,6 +251,9 @@ curl -s $API/providers/provider-a/wagering/transactions/transaction-123 -H "Auth
 curl -s -X POST $API/wallets/$WALLET/reconciliation -H "Authorization: Bearer $BACKOFFICE"
 ```
 
+Uma operação que termina `FAILED` com `PROCESSING_FAILED` devolve `failureDetail` fixo
+`processing failed`; a causa interna aparece só no log do processo.
+
 Enviar a mesma operação pela fila do provedor (o `providerId` do corpo precisa ser o da fila; o
 consumidor usa `data.idempotencyKey` e o `messageId` do envelope; o `MessageGroupId` usado nos
 testes é o `walletId`):

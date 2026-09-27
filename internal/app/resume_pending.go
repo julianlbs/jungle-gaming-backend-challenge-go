@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wallet"
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/platform/logging"
 )
 
 type PendingClaim struct {
@@ -44,6 +46,10 @@ func (r ResumeResult) String() string {
 	}
 }
 
+// apiFailureDetail is the stable, non-sensitive text persisted and returned on GET for
+// PROCESSING_FAILED. The real cause stays in the process log.
+const apiFailureDetail = "processing failed"
+
 type PendingResumer struct {
 	uow    UnitOfWork
 	queue  PendingQueue
@@ -51,10 +57,14 @@ type PendingResumer struct {
 	ids    IDGenerator
 	policy PendingPolicy
 	nudger ReferenceNudger
+	log    *slog.Logger
 }
 
-func NewPendingResumer(uow UnitOfWork, queue PendingQueue, clock Clock, ids IDGenerator, policy PendingPolicy, nudger ReferenceNudger) *PendingResumer {
-	return &PendingResumer{uow: uow, queue: queue, clock: clock, ids: ids, policy: policy, nudger: nudger}
+func NewPendingResumer(uow UnitOfWork, queue PendingQueue, clock Clock, ids IDGenerator, policy PendingPolicy, nudger ReferenceNudger, log *slog.Logger) *PendingResumer {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &PendingResumer{uow: uow, queue: queue, clock: clock, ids: ids, policy: policy, nudger: nudger, log: log}
 }
 
 // RunOnce claims a batch of due operations and resumes each in its own transaction. Transient
@@ -164,8 +174,10 @@ func (r *PendingResumer) Resume(ctx context.Context, c PendingClaim) (res Resume
 }
 
 // fail records a permanent processing error so that the operation stops being retried and
-// remains auditable.
+// remains auditable. The API-visible detail is fixed; the cause is only logged.
 func (r *PendingResumer) fail(ctx context.Context, c PendingClaim, cause error) error {
+	r.log.ErrorContext(logging.With(ctx, logging.KeyTransactionID, c.TransactionID.String()),
+		"pending resume failed permanently", "error", cause, logging.KeyWalletID, c.WalletID.String())
 	return r.uow.Do(ctx, func(ctx context.Context, tx Tx) error {
 		t, err := tx.Transactions().GetForUpdate(ctx, c.TransactionID)
 		if err != nil {
@@ -174,11 +186,7 @@ func (r *PendingResumer) fail(ctx context.Context, c PendingClaim, cause error) 
 		if t.Status() != wagering.StatusPendingReference {
 			return nil
 		}
-		detail := cause.Error()
-		if len(detail) > 500 {
-			detail = detail[:500]
-		}
-		if err := t.Fail(detail, r.clock.Now()); err != nil {
+		if err := t.Fail(apiFailureDetail, r.clock.Now()); err != nil {
 			return err
 		}
 		return tx.Transactions().Update(ctx, t)

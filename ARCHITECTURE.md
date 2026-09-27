@@ -224,7 +224,8 @@ stateDiagram-v2
   conflito de chave) também não persistem nada e são reportadas como erro (HTTP `4xx`, SQS DLQ).
   `FAILED`/`PROCESSING_FAILED` só é gravado quando o worker de pendências encontra um erro
   permanente inesperado ao retomar uma operação já persistida, para que ela pare de ser tentada
-  e fique auditável.
+  e fique auditável. O `failureDetail` persistido (e devolvido no GET) é o texto fixo
+  `processing failed`; a causa interna vai só para o log.
 
 ### Códigos de falha
 
@@ -238,7 +239,7 @@ stateDiagram-v2
 | `REFERENCE_AMOUNT_MISMATCH` | `REJECTED` | Valor da reversão diferente do referenciado |
 | `REFERENCE_KIND_NOT_ALLOWED` | `REJECTED` | Tipo referenciado não pode ser alvo desta operação |
 | `REFERENCE_ALREADY_REVERSED` | `REJECTED` | A referência já tem uma reversão processada |
-| `PROCESSING_FAILED` | `FAILED` | Erro permanente de processamento, registrado para auditoria |
+| `PROCESSING_FAILED` | `FAILED` | Erro permanente de processamento; `failureDetail` é sempre `processing failed` |
 
 Todos esses códigos são resultados definitivos. Entradas corrigíveis nunca são persistidas; elas
 voltam como `400 VALIDATION_ERROR` (com o campo), `WALLET_NOT_FOUND` ou `WALLET_MISMATCH`.
