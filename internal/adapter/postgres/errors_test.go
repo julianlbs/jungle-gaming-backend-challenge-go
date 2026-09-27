@@ -141,3 +141,19 @@ func TestPgInterval(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestRetryReportsEveryFailureIncludingTheLast(t *testing.T) {
+	var retries, failures []string
+	p := fastPolicy(2)
+	p.OnRetry = func(r string) { retries = append(retries, r) }
+	p.OnFailure = func(r string) { failures = append(failures, r) }
+	err := p.do(context.Background(), func(context.Context) error {
+		return &pgconn.PgError{Code: "55P03"}
+	})
+	if !errors.Is(err, app.ErrUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(retries) != 1 || len(failures) != 2 || failures[1] != "lock_timeout" {
+		t.Fatalf("retries=%v failures=%v", retries, failures)
+	}
+}

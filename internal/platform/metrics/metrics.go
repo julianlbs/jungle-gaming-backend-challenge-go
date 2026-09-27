@@ -20,7 +20,7 @@ type Metrics struct {
 	WagerDuration           *prometheus.HistogramVec
 	InboxDuplicates         *prometheus.CounterVec
 	DBRetries               *prometheus.CounterVec
-	ConcurrencyConflicts    prometheus.Counter
+	ConcurrencyConflicts    *prometheus.CounterVec
 	SQSMessages             *prometheus.CounterVec
 	SQSRetries              prometheus.Counter
 	SQSDeadLettered         *prometheus.CounterVec
@@ -52,8 +52,8 @@ func New() *Metrics {
 			"Broker messages already handled by the consumer.", "consumer"),
 		DBRetries: f.counterVec("db_transaction_retries_total",
 			"Database transactions retried after a transient failure.", "reason"),
-		ConcurrencyConflicts: f.counter("wallet_concurrency_conflicts_total",
-			"Wallet updates that lost an optimistic version check."),
+		ConcurrencyConflicts: f.counterVec("wallet_concurrency_conflicts_total",
+			"Transactions that lost to a concurrent writer: lock timeout, serialization, deadlock or version check.", "reason"),
 		SQSMessages: f.counterVec("sqs_messages_total",
 			"Consumed messages by outcome.", "outcome"),
 		SQSRetries: f.counter("sqs_message_retries_total",
@@ -87,6 +87,29 @@ func (m *Metrics) Handler() http.Handler {
 // ObserveDBRetry is compatible with postgres.RetryPolicy.OnRetry.
 func (m *Metrics) ObserveDBRetry(reason string) {
 	m.DBRetries.WithLabelValues(reason).Inc()
+}
+
+// ObserveDBFailure is compatible with postgres.RetryPolicy.OnFailure.
+func (m *Metrics) ObserveDBFailure(reason string) {
+	switch reason {
+	case "lock_timeout", "serialization", "deadlock":
+		m.ConcurrencyConflicts.WithLabelValues(reason).Inc()
+	}
+}
+
+// ObserveWager records one handled wager. Label values must come from bounded sets.
+func (m *Metrics) ObserveWager(channel, kind, status string, replay bool, conflict string, concurrency bool, d time.Duration) {
+	m.WagerTransactions.WithLabelValues(channel, kind, status).Inc()
+	m.WagerDuration.WithLabelValues(channel, kind).Observe(d.Seconds())
+	if replay {
+		m.IdempotentReplays.WithLabelValues(channel).Inc()
+	}
+	if conflict != "" {
+		m.IdempotencyConflicts.WithLabelValues(conflict).Inc()
+	}
+	if concurrency {
+		m.ConcurrencyConflicts.WithLabelValues("version").Inc()
+	}
 }
 
 func (m *Metrics) ObserveReconciliation(consistent bool) {

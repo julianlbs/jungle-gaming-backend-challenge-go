@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/domain/wagering"
 )
@@ -40,6 +41,7 @@ func NewWagerIntake(uow UnitOfWork, processor *WagerProcessor, clock Clock) *Wag
 }
 
 func (i *WagerIntake) Handle(ctx context.Context, msg IncomingWager) (IntakeResult, error) {
+	start := time.Now()
 	received := i.clock.Now()
 	hash := MessageHash(msg.Command)
 	var res IntakeResult
@@ -77,8 +79,10 @@ func (i *WagerIntake) Handle(ctx context.Context, msg IncomingWager) (IntakeResu
 		return nil
 	})
 	if err != nil {
+		i.processor.observe(msg.Command, WagerOutcome{}, false, err, start)
 		return IntakeResult{}, err
 	}
+	i.processor.observe(msg.Command, res.Outcome, res.Duplicate, nil, start)
 	if !res.Duplicate {
 		i.processor.AfterCommit(ctx, res.Outcome)
 	}

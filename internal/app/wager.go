@@ -42,19 +42,28 @@ type ReferenceNudger interface {
 }
 
 type WagerProcessor struct {
-	uow    UnitOfWork
-	clock  Clock
-	ids    IDGenerator
-	policy PendingPolicy
-	nudger ReferenceNudger
+	uow      UnitOfWork
+	clock    Clock
+	ids      IDGenerator
+	policy   PendingPolicy
+	nudger   ReferenceNudger
+	observer WagerObserver
 }
 
 func NewWagerProcessor(uow UnitOfWork, clock Clock, ids IDGenerator, policy PendingPolicy, nudger ReferenceNudger) *WagerProcessor {
 	return &WagerProcessor{uow: uow, clock: clock, ids: ids, policy: policy, nudger: nudger}
 }
 
+// WithObserver reports the result of every Process call and of every message handled by a
+// WagerIntake built on this processor.
+func (p *WagerProcessor) WithObserver(o WagerObserver) *WagerProcessor {
+	p.observer = o
+	return p
+}
+
 // Process handles one operation in its own transaction.
 func (p *WagerProcessor) Process(ctx context.Context, cmd WagerCommand) (WagerOutcome, error) {
+	start := time.Now()
 	var out WagerOutcome
 	err := p.uow.Do(ctx, func(ctx context.Context, tx Tx) error {
 		var err error
@@ -62,8 +71,10 @@ func (p *WagerProcessor) Process(ctx context.Context, cmd WagerCommand) (WagerOu
 		return err
 	})
 	if err != nil {
+		p.observe(cmd, WagerOutcome{}, false, err, start)
 		return WagerOutcome{}, err
 	}
+	p.observe(cmd, out, false, nil, start)
 	p.nudge(ctx, out)
 	return out, nil
 }

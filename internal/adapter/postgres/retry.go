@@ -15,6 +15,8 @@ type RetryPolicy struct {
 	MaxDelay  time.Duration
 	// OnRetry, when set, is called before each new attempt.
 	OnRetry func(reason string)
+	// OnFailure, when set, is called for every retryable failure, including the last one.
+	OnFailure func(reason string)
 }
 
 func DefaultRetryPolicy() RetryPolicy {
@@ -36,6 +38,9 @@ func (p RetryPolicy) do(ctx context.Context, fn func(context.Context) error) err
 			return err
 		}
 		lastErr = err
+		if p.OnFailure != nil {
+			p.OnFailure(reason)
+		}
 		if attempt >= attempts {
 			break
 		}

@@ -86,8 +86,8 @@ var App = fx.Module("app",
 		func() app.IDGenerator { return app.TimeOrderedIDs{} },
 		pendingPolicy,
 		app.NewWalletOpener,
-		func(uow app.UnitOfWork, clock app.Clock, ids app.IDGenerator, policy app.PendingPolicy, store *postgres.PendingStore) *app.WagerProcessor {
-			return app.NewWagerProcessor(uow, clock, ids, policy, store)
+		func(uow app.UnitOfWork, clock app.Clock, ids app.IDGenerator, policy app.PendingPolicy, store *postgres.PendingStore, m *metrics.Metrics) *app.WagerProcessor {
+			return app.NewWagerProcessor(uow, clock, ids, policy, store).WithObserver(wagerObserver(m))
 		},
 		func(uow app.UnitOfWork, clock app.Clock, ids app.IDGenerator, policy app.PendingPolicy, store *postgres.PendingStore) *app.PendingResumer {
 			return app.NewPendingResumer(uow, faultyPendingQueue{store}, clock, ids, policy, store)
@@ -125,10 +125,17 @@ func newPool(lc fx.Lifecycle, cfg config.Config, log *slog.Logger) (*pgxpool.Poo
 func newUnitOfWork(pool *pgxpool.Pool, cfg config.Config, m *metrics.Metrics) *postgres.UnitOfWork {
 	retry := postgres.DefaultRetryPolicy()
 	retry.OnRetry = m.ObserveDBRetry
+	retry.OnFailure = m.ObserveDBFailure
 	return postgres.NewUnitOfWork(pool, postgres.TxConfig{
 		LockTimeout:      cfg.Postgres.LockTimeout,
 		StatementTimeout: cfg.Postgres.StatementTimeout,
 	}, retry)
+}
+
+func wagerObserver(m *metrics.Metrics) app.WagerObserver {
+	return func(o app.WagerObservation) {
+		m.ObserveWager(o.Channel, o.Kind, o.Status, o.Replay, o.Conflict, o.ConcurrencyConflict, o.Duration)
+	}
 }
 
 func pendingPolicy(cfg config.Config) app.PendingPolicy {
