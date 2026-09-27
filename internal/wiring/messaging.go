@@ -48,7 +48,7 @@ var Outbox = fx.Module("outbox",
 
 func registerRelay(lc fx.Lifecycle, cfg config.Config, store *postgres.OutboxStore, client *sns.Client,
 	log *slog.Logger, m *metrics.Metrics) {
-	relay := app.NewOutboxRelay(store, snspublisher.New(client, cfg.SNS.TopicARN), app.RelayConfig{
+	relay := app.NewOutboxRelay(store, faultyPublisher{snspublisher.New(client, cfg.SNS.TopicARN)}, app.RelayConfig{
 		Owner:     cfg.InstanceID + "-" + uuid.NewString()[:8],
 		Lease:     cfg.Outbox.Lease,
 		BatchSize: cfg.Outbox.BatchSize,
@@ -108,7 +108,7 @@ func registerPendingWorker(lc fx.Lifecycle, cfg config.Config, resumer *app.Pend
 
 func registerConsumer(lc fx.Lifecycle, cfg config.Config, client *sqs.Client, intake *app.WagerIntake,
 	log *slog.Logger, m *metrics.Metrics) {
-	c := sqsconsumer.New(client, intake, sqsconsumer.Config{
+	c := sqsconsumer.New(client, faultyHandler{intake}, sqsconsumer.Config{
 		QueueURL:         cfg.SQS.QueueURL,
 		DLQURL:           cfg.SQS.DLQURL,
 		AllowedProviders: cfg.SQS.AllowedProviders,

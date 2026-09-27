@@ -90,7 +90,7 @@ var App = fx.Module("app",
 			return app.NewWagerProcessor(uow, clock, ids, policy, store)
 		},
 		func(uow app.UnitOfWork, clock app.Clock, ids app.IDGenerator, policy app.PendingPolicy, store *postgres.PendingStore) *app.PendingResumer {
-			return app.NewPendingResumer(uow, store, clock, ids, policy, store)
+			return app.NewPendingResumer(uow, faultyPendingQueue{store}, clock, ids, policy, store)
 		},
 		func(read *postgres.ReadModel, clock app.Clock) *app.Queries { return app.NewQueries(read, clock) },
 	),
