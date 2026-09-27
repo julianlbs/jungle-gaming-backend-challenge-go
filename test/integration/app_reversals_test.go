@@ -163,6 +163,61 @@ func TestSameOperationConcurrentlyHasOneEffect(t *testing.T) {
 	}
 }
 
+func TestConcurrentReversalOfOneBetHasOneCredit(t *testing.T) {
+	f := newAppFixture(t)
+	ctx := context.Background()
+	w := f.openWallet(t, "100.00")
+	bet, err := f.processor.Process(ctx, wager(w, "BET", "40.00", "bet"))
+	requireOutcome(t, bet, err, processed, "60.00", false)
+
+	const reversals = 8
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		statuses = map[wagering.Status]int{}
+		codes    = map[wagering.FailureCode]int{}
+	)
+	for i := range reversals {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			kind := "REFUND"
+			if i%2 == 1 {
+				kind = "ROLLBACK"
+			}
+			cmd := wager(w, kind, "40.00", fmt.Sprintf("reversal-%d", i))
+			cmd.ReferenceExternalTransactionID = "bet"
+			out, err := f.processor.Process(ctx, cmd)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			statuses[out.Transaction.Status()]++
+			codes[out.Transaction.FailureCode()]++
+		}()
+	}
+	wg.Wait()
+	if statuses[processed] != 1 || statuses[rejected] != reversals-1 || codes[wagering.FailureReferenceAlreadyReversed] != reversals-1 {
+		t.Fatalf("statuses = %v codes = %v", statuses, codes)
+	}
+	if got := f.balance(t, w); got != "100.00" {
+		t.Fatalf("balance = %s", got)
+	}
+	if n := countRows(t, f.db, `SELECT count(*) FROM wallet_ledger_entries e JOIN wager_transactions t ON t.id = e.transaction_id
+		WHERE e.wallet_id = $1 AND t.kind IN ('REFUND', 'ROLLBACK') AND e.direction = 'CREDIT' AND e.amount_minor = 4000`, w.ID().UUID()); n != 1 {
+		t.Fatalf("reversal credits = %d", n)
+	}
+	if n := countRows(t, f.db, `SELECT count(*) FROM wallet_ledger_entries WHERE wallet_id = $1`, w.ID().UUID()); n != 3 {
+		t.Fatalf("ledger entries = %d, want opening, bet and one reversal", n)
+	}
+	rec, err := app.NewQueries(postgresReadModel(f), app.SystemClock{}).Reconcile(ctx, w.ID().String())
+	if err != nil || !rec.Consistent {
+		t.Fatalf("reconciliation: %+v %v", rec, err)
+	}
+}
+
 func TestDistinctWalletsInParallel(t *testing.T) {
 	f := newAppFixture(t)
 	ctx := context.Background()
