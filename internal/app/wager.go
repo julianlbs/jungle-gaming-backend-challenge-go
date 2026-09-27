@@ -186,21 +186,30 @@ func (p *WagerProcessor) replay(ctx context.Context, tx Tx, t *wagering.Transact
 	existing, err := tx.Transactions().FindByIdempotencyKey(ctx, ext.ProviderID, ext.IdempotencyKey)
 	switch {
 	case err == nil:
-		if !existing.SamePayload(ext.PayloadHash) {
-			return WagerOutcome{}, false, ErrIdempotencyKeyReused
-		}
-		return WagerOutcome{Transaction: existing, Replay: true}, true, nil
+		return replayOf(existing, ext)
 	case !errors.Is(err, ErrNotFound):
 		return WagerOutcome{}, false, err
 	}
-	_, err = tx.Transactions().FindByExternalID(ctx, ext.ProviderID, ext.ExternalID)
+	// Each statement sees its own snapshot, so a concurrent request for the same operation may
+	// commit between the two lookups; only a different key is a conflict.
+	existing, err = tx.Transactions().FindByExternalID(ctx, ext.ProviderID, ext.ExternalID)
 	switch {
 	case err == nil:
+		if prev, ok := existing.External(); ok && prev.IdempotencyKey == ext.IdempotencyKey {
+			return replayOf(existing, ext)
+		}
 		return WagerOutcome{}, false, ErrExternalTransactionConflict
 	case !errors.Is(err, ErrNotFound):
 		return WagerOutcome{}, false, err
 	}
 	return WagerOutcome{}, false, nil
+}
+
+func replayOf(existing *wagering.Transaction, ext wagering.External) (WagerOutcome, bool, error) {
+	if !existing.SamePayload(ext.PayloadHash) {
+		return WagerOutcome{}, false, ErrIdempotencyKeyReused
+	}
+	return WagerOutcome{Transaction: existing, Replay: true}, true, nil
 }
 
 // loadReference returns the referenced transaction (nil when absent) and whether it was reversed.
