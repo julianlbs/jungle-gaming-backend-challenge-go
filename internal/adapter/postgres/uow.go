@@ -7,6 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/julianlbs/jungle-gaming-backend-challenge-go/internal/app"
 )
 
 type TxConfig struct {
@@ -19,7 +21,7 @@ func DefaultTxConfig() TxConfig {
 }
 
 // UnitOfWork runs a callback inside one READ COMMITTED transaction, retrying the whole
-// callback on transient failures. The callback must therefore be free of external side effects.
+// callback on transient failures.
 type UnitOfWork struct {
 	pool  *pgxpool.Pool
 	cfg   TxConfig
@@ -30,7 +32,14 @@ func NewUnitOfWork(pool *pgxpool.Pool, cfg TxConfig, retry RetryPolicy) *UnitOfW
 	return &UnitOfWork{pool: pool, cfg: cfg, retry: retry}
 }
 
-func (u *UnitOfWork) Do(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
+func (u *UnitOfWork) Do(ctx context.Context, fn func(context.Context, app.Tx) error) error {
+	return u.DoRaw(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return fn(ctx, newTxRepos(tx))
+	})
+}
+
+// DoRaw is Do for adapters that need the underlying pgx transaction.
+func (u *UnitOfWork) DoRaw(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
 	return u.retry.do(ctx, func(ctx context.Context) error {
 		return u.attempt(ctx, fn)
 	})
@@ -64,3 +73,29 @@ func pgInterval(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dms", d.Milliseconds())
 }
+
+type txRepos struct {
+	wallets      *WalletRepository
+	transactions *TransactionRepository
+	ledger       *LedgerRepository
+	outbox       *OutboxStore
+	inbox        *InboxStore
+}
+
+func newTxRepos(tx pgx.Tx) *txRepos {
+	return &txRepos{
+		wallets:      NewWalletRepository(tx),
+		transactions: NewTransactionRepository(tx),
+		ledger:       NewLedgerRepository(tx),
+		outbox:       NewOutboxStore(tx),
+		inbox:        NewInboxStore(tx),
+	}
+}
+
+func (r *txRepos) Wallets() app.WalletRepository           { return r.wallets }
+func (r *txRepos) Transactions() app.TransactionRepository { return r.transactions }
+func (r *txRepos) Ledger() app.LedgerRepository            { return r.ledger }
+func (r *txRepos) Outbox() app.OutboxRepository            { return r.outbox }
+func (r *txRepos) Inbox() app.InboxRepository              { return r.inbox }
+
+var _ app.UnitOfWork = (*UnitOfWork)(nil)

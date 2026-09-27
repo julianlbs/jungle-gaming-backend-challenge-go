@@ -149,7 +149,7 @@ func TestInboxDuplicateAndRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := uow.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			err := uow.DoRaw(ctx, func(ctx context.Context, tx pgx.Tx) error {
 				inbox := postgres.NewInboxStore(tx)
 				if _, err := inbox.Find(ctx, entry.Consumer, entry.MessageID); err == nil {
 					mu.Lock()

@@ -196,7 +196,7 @@ func seedWallet(t *testing.T, db *testDB, initial string) seededWallet {
 		OpeningID: must(wagering.NewID(uuid.New())),
 	}
 	amount := brlAmount(initial)
-	err := db.UoW.Do(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
+	err := db.UoW.DoRaw(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
 		w, mv, err := wallet.Open(s.ID, s.PlayerID, amount, now)
 		if err != nil {
 			return err

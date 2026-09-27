@@ -23,7 +23,7 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	w := seedWallet(t, db, "100.00")
 
-	err := db.UoW.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err := db.UoW.DoRaw(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		dup, _, _ := wallet.Open(must(wallet.NewID(uuid.New())), w.PlayerID, must(money.Zero(brl)), time.Now())
 		return postgres.NewWalletRepository(tx).Insert(ctx, dup)
 	})
@@ -32,7 +32,7 @@ func TestRepositoriesRoundTrip(t *testing.T) {
 	}
 
 	bet := newBet(t, w, "10.50")
-	err = db.UoW.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err = db.UoW.DoRaw(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		wallets, txs, ledger := postgres.NewWalletRepository(tx), postgres.NewTransactionRepository(tx), postgres.NewLedgerRepository(tx)
 		if err := txs.Insert(ctx, bet); err != nil {
 			return err

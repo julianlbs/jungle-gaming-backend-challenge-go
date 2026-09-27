@@ -105,7 +105,7 @@ func TestLedgerChainAndWalletConsistency(t *testing.T) {
 		requireSQLState(t, err, checkViolation)
 	})
 	t.Run("matching ledger entry commits", func(t *testing.T) {
-		err := db.UoW.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := db.UoW.DoRaw(ctx, func(ctx context.Context, tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, `UPDATE wallets SET balance_minor = 9000, version = 2, updated_at = now()
 				WHERE id = $1`, w.ID.UUID()); err != nil {
 				return err
