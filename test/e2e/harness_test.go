@@ -152,7 +152,7 @@ func newCluster(t *testing.T) *cluster {
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", ""))))
 	c.sqs, c.sns = sqs.NewFromConfig(cfg), sns.NewFromConfig(cfg)
 	c.dlq = c.fifoQueue("dlq", "", 0, 30)
-	c.queue = c.fifoQueue("wagers", c.dlq, 5, 30)
+	c.queue = c.fifoQueue("wagers", c.dlq, 5, 5)
 	c.topic, c.audit = c.fifoTopic()
 
 	for _, client := range []string{"provider-a", "provider-b", "wallet-backoffice"} {
@@ -175,7 +175,7 @@ func newCluster(t *testing.T) *cluster {
 		"SQS_WAGER_QUEUE_URL":   c.queue,
 		"SQS_WAGER_DLQ_URL":     c.dlq,
 		"SQS_ALLOWED_PROVIDERS": "provider-a,provider-b",
-		"SQS_MESSAGE_TIMEOUT":   "10s",
+		"SQS_MESSAGE_TIMEOUT":   "4s",
 		"SNS_EVENTS_TOPIC_ARN":  c.topic,
 		"OUTBOX_POLL_INTERVAL":  "100ms",
 		"OUTBOX_LEASE":          "3s",
@@ -252,9 +252,8 @@ type instance struct {
 	state   *os.ProcessState
 }
 
-// start runs a process with the cluster environment plus overrides and waits until it is
-// ready, or, when it has no api role, until it has been running for a moment.
-func (c *cluster) start(name string, overrides map[string]string) *instance {
+// spawn runs a process with the cluster environment plus overrides without waiting for it.
+func (c *cluster) spawn(name string, overrides map[string]string) (*instance, string) {
 	c.t.Helper()
 	vars := map[string]string{}
 	for k, v := range c.baseEnv {
@@ -292,8 +291,15 @@ func (c *cluster) start(name string, overrides map[string]string) *instance {
 			c.t.Logf("--- %s log ---\n%s", name, tail(out, 60))
 		}
 	})
+	return inst, vars["APP_ROLES"]
+}
 
-	if !strings.Contains(vars["APP_ROLES"], "api") {
+// start runs a process with the cluster environment plus overrides and waits until it is
+// ready, or, when it has no api role, until it has been running for a moment.
+func (c *cluster) start(name string, overrides map[string]string) *instance {
+	c.t.Helper()
+	inst, roles := c.spawn(name, overrides)
+	if !strings.Contains(roles, "api") {
 		select {
 		case <-inst.done:
 			c.t.Fatalf("%s exited during startup", name)
