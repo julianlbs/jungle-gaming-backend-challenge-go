@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"testing"
+	"time"
 
 	"go.uber.org/fx"
 
@@ -31,6 +32,15 @@ func testConfig(t *testing.T, roles string) config.Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestMetricsServerTimeouts(t *testing.T) {
+	srv := newMetricsServer(nil)
+	if srv.ReadHeaderTimeout != 5*time.Second || srv.ReadTimeout != 15*time.Second ||
+		srv.WriteTimeout != 30*time.Second || srv.IdleTimeout != 60*time.Second {
+		t.Fatalf("timeouts = header %s read %s write %s idle %s",
+			srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
+	}
 }
 
 func TestDependencyGraphIsComplete(t *testing.T) {

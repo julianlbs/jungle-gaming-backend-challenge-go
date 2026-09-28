@@ -169,12 +169,22 @@ func pendingPolicy(cfg config.Config) app.PendingPolicy {
 	}
 }
 
+func newMetricsServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
 // registerMetricsServer binds the metrics port during start so that a port conflict fails
 // the start instead of surfacing later.
 func registerMetricsServer(lc fx.Lifecycle, cfg config.Config, m *metrics.Metrics, log *slog.Logger) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", m.Handler())
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := newMetricsServer(mux)
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.MetricsAddr)
