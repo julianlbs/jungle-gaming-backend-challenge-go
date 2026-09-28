@@ -317,3 +317,112 @@ func TestCompetingRelaysPublishOnePartitionInOrder(t *testing.T) {
 		}
 	}
 }
+
+// failFirstPublish rejects the first attempt of one event and then delegates.
+type failFirstPublish struct {
+	id    string
+	inner app.EventPublisher
+	once  atomic.Bool
+}
+
+func (p *failFirstPublish) Publish(ctx context.Context, ev app.ClaimedEvent) error {
+	if ev.ID.String() == p.id && p.once.CompareAndSwap(false, true) {
+		return errors.New("sns down")
+	}
+	return p.inner.Publish(ctx, ev)
+}
+
+func TestCompetingRelaysKeepOrderWhenFirstPublishFails(t *testing.T) {
+	f := newAppFixture(t)
+	a := newAWS(t)
+	topic, audit := a.fifoTopic(t)
+	ctx := context.Background()
+
+	w := f.openWallet(t, "100.00")
+	for i := range 4 {
+		if _, err := f.processor.Process(ctx, wager(w, "BET", "1.00", fmt.Sprintf("fail-ord-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	partition := w.ID().String()
+	rows, err := f.db.App.Query(ctx, `SELECT id::text FROM outbox_events WHERE partition_key = $1 ORDER BY seq`, partition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var want []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(want) < 2 {
+		t.Fatalf("events = %d", len(want))
+	}
+
+	store := postgres.NewOutboxStore(f.db.App)
+	recorder := &orderRecorder{inner: snspublisher.New(a.sns, topic)}
+	publisher := &failFirstPublish{id: want[0], inner: recorder}
+	var wg sync.WaitGroup
+	for i := range 2 {
+		relay := app.NewOutboxRelay(store, publisher, app.RelayConfig{
+			Owner: fmt.Sprintf("fail-order-relay-%d", i), Lease: 10 * time.Second, BatchSize: 1,
+			BaseDelay: 20 * time.Millisecond, MaxDelay: time.Second,
+		}, nil)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				if countRows(t, f.db, `SELECT count(*) FROM outbox_events WHERE partition_key = $1 AND published_at IS NULL`, partition) == 0 {
+					return
+				}
+				if _, err := relay.RunOnce(ctx); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if !publisher.once.Load() {
+		t.Fatal("first event was never failed")
+	}
+	var attempts int
+	if err := f.db.App.QueryRow(ctx, `SELECT attempts FROM outbox_events WHERE id = $1`, want[0]).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts < 2 {
+		t.Fatalf("first event attempts = %d, want at least 2", attempts)
+	}
+	if n := countRows(t, f.db, `SELECT count(*) FROM outbox_events WHERE partition_key = $1 AND published_at IS NULL`, partition); n != 0 {
+		t.Fatalf("%d events left unpublished", n)
+	}
+	recorder.mu.Lock()
+	got := append([]string(nil), recorder.order...)
+	recorder.mu.Unlock()
+	if len(got) != len(want) {
+		t.Fatalf("published %d events, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("publish order at %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+
+	delivered := a.drain(t, audit, len(want), 20*time.Second)
+	if len(delivered) != len(want) {
+		t.Fatalf("audit delivered %d events, want %d", len(delivered), len(want))
+	}
+	for i, m := range delivered {
+		if id := eventID(t, m); id != want[i] {
+			t.Fatalf("audit order at %d = %s, want %s", i, id, want[i])
+		}
+	}
+}
