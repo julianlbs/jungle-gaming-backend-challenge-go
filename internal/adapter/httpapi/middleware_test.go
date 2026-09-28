@@ -151,12 +151,16 @@ func TestDecodeJSON(t *testing.T) {
 		status            int
 	}{
 		"valid":         {`{"name":"a"}`, "application/json", 0},
+		"charset":       {`{"name":"a"}`, "application/json; charset=utf-8", 0},
+		"uppercase":     {`{"name":"a"}`, "Application/JSON", 0},
 		"unknown field": {`{"name":"a","x":1}`, "application/json", 400},
 		"two objects":   {`{"name":"a"}{"name":"b"}`, "application/json", 400},
 		"not json":      {`{`, "application/json", 400},
 		"empty":         {``, "application/json", 400},
 		"wrong type":    {`{"name":1}`, "application/json", 400},
 		"media type":    {`{"name":"a"}`, "text/plain", 415},
+		"json prefix":   {`{"name":"a"}`, "application/jsonp", 415},
+		"missing type":  {`{"name":"a"}`, "", 415},
 		"too large":     {`{"name":"` + strings.Repeat("a", maxBodyBytes) + `"}`, "application/json", 413},
 	} {
 		t.Run(name, func(t *testing.T) {

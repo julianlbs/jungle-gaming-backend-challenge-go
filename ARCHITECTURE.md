@@ -480,6 +480,10 @@ Resultado de `POST /wagering/transactions` (corpo `transactionId`, `status`, `ba
 | Content-Type inválido / corpo grande | `415` / `413` | `UNSUPPORTED_MEDIA_TYPE` / `PAYLOAD_TOO_LARGE` |
 | Indisponibilidade transitória | `503` + `Retry-After: 1` | `SERVICE_UNAVAILABLE`, `retryable: true` |
 
+O `Content-Type` de um corpo precisa ser exatamente `application/json`, lido com
+`mime.ParseMediaType`. Parâmetros como `charset` são aceitos. Um prefixo, por exemplo
+`application/jsonp`, não é.
+
 Outros códigos: `404 NOT_FOUND`, `409 WALLET_ALREADY_EXISTS` (abertura duplicada para o mesmo
 jogador e moeda) e `500 INTERNAL_ERROR` (detalhes só no log).
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"regexp"
 	"runtime/debug"
@@ -141,9 +142,15 @@ func requireAnyScope(next http.HandlerFunc, scopes ...string) http.Handler {
 	})
 }
 
+func jsonContentType(header string) bool {
+	media, _, err := mime.ParseMediaType(header)
+	return err == nil && media == "application/json"
+}
+
 // decodeJSON reads exactly one JSON object, rejecting unknown fields and oversized bodies.
+// The media type must be application/json; a prefix such as application/jsonp is rejected.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) *Problem {
-	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(strings.ToLower(ct), "application/json") {
+	if !jsonContentType(r.Header.Get("Content-Type")) {
 		p := problem(http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "use application/json")
 		return &p
 	}
