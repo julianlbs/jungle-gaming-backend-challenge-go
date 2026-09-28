@@ -97,12 +97,20 @@ func (c *Consumer) Run(ctx context.Context) {
 	c.wg.Wait()
 }
 
+// poll reserves a worker slot before ReceiveMessage and takes one message for that slot.
+// Visibility is not extended while the message is waiting for a slot or being handled:
+// MessageTimeout is shorter than the queue visibility timeout, so handling finishes first.
 func (c *Consumer) poll(ctx context.Context, queueURL string, sem chan struct{}) {
 	failures := 0
-	for ctx.Err() == nil {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sem <- struct{}{}:
+		}
 		out, err := c.sqs.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:              aws.String(queueURL),
-			MaxNumberOfMessages:   10,
+			MaxNumberOfMessages:   1,
 			WaitTimeSeconds:       int32(c.cfg.WaitTime / time.Second),
 			MessageAttributeNames: traceAttributes,
 			MessageSystemAttributeNames: []types.MessageSystemAttributeName{
@@ -110,9 +118,13 @@ func (c *Consumer) poll(ctx context.Context, queueURL string, sem chan struct{})
 				types.MessageSystemAttributeNameMessageGroupId,
 			},
 		})
-		if err != nil {
-			if ctx.Err() != nil {
-				return
+		if err != nil || len(out.Messages) == 0 {
+			<-sem
+			if err == nil || ctx.Err() != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
 			failures++
 			delay := min(time.Duration(1<<min(failures, 5))*time.Second, 30*time.Second)
@@ -121,19 +133,12 @@ func (c *Consumer) poll(ctx context.Context, queueURL string, sem chan struct{})
 			continue
 		}
 		failures = 0
-		for _, group := range groupByMessageGroup(out.Messages) {
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				c.release(queueURL, group)
-				continue
-			}
-			c.wg.Add(1)
-			go func(group []types.Message) {
-				defer func() { <-sem; c.wg.Done() }()
-				c.handleGroup(ctx, queueURL, group)
-			}(group)
-		}
+		msgs := out.Messages
+		c.wg.Add(1)
+		go func() {
+			defer func() { <-sem; c.wg.Done() }()
+			c.handleGroup(ctx, queueURL, msgs)
+		}()
 	}
 }
 

@@ -109,7 +109,7 @@ processo sai com código 2.
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Alternativa às credenciais do arquivo, fora do compose |
 | `SQS_PROVIDER_QUEUES` | obrigatória com `consumer` | Filas `providerId=url` separadas por vírgula; cada fila pertence a um único provedor |
 | `SQS_WAGER_DLQ_URL` | obrigatória com `consumer` | DLQ compartilhada `wager-transactions-dlq.fifo` |
-| `SQS_MAX_IN_FLIGHT` | `10` | Grupos de mensagens processados em paralelo |
+| `SQS_MAX_IN_FLIGHT` | `10` | Mensagens em tratamento ao mesmo tempo; o recebimento espera uma vaga livre |
 | `SQS_MESSAGE_TIMEOUT` | `30s` | Prazo de tratamento de uma mensagem; tem de ser menor que `SQS_QUEUE_VISIBILITY_TIMEOUT` |
 | `SQS_QUEUE_VISIBILITY_TIMEOUT` | `60s` | Visibility timeout das filas de aposta; o mesmo valor padrão usado por `deploy/aws/init-aws.sh` |
 | `SNS_EVENTS_TOPIC_ARN` | obrigatória com `outbox` | Tópico `wallet-events.fifo` |

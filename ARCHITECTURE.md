@@ -303,9 +303,12 @@ sequenceDiagram
 
 ## Consumidor SQS
 
-- Long polling de 20 s em cada fila de `SQS_PROVIDER_QUEUES`, até 10 mensagens por chamada. As
-  mensagens são agrupadas por `MessageGroupId` e cada grupo é processado em ordem numa goroutine;
-  até `SQS_MAX_IN_FLIGHT` grupos em paralelo, somando todas as filas.
+- Cada fila de `SQS_PROVIDER_QUEUES` reserva uma vaga de `SQS_MAX_IN_FLIGHT` e só então faz long
+  polling de 20 s pedindo uma mensagem. A visibilidade não é prolongada enquanto não há vaga nem
+  durante o tratamento: `SQS_MESSAGE_TIMEOUT` cabe inteiro no visibility timeout, então o
+  tratamento termina antes de a mensagem voltar. Se uma chamada devolver mais de uma mensagem do
+  mesmo `MessageGroupId`, elas seguem em ordem na mesma vaga; as que ficarem para trás são
+  liberadas com visibilidade 0.
 - `MessageGroupId`: os produtores usam o `walletId`, o que preserva a ordem por carteira.
   `MessageDeduplicationId`: definido pelo produtor (a fila não usa deduplicação por conteúdo). A
   deduplicação de 5 minutos do SQS é só uma otimização: a garantia vem da inbox e da
@@ -345,7 +348,8 @@ Visibility timeout das filas: `SQS_QUEUE_VISIBILITY_TIMEOUT` (60 s por padrão),
 que `deploy/aws/init-aws.sh` aplica. A configuração rejeita `SQS_MESSAGE_TIMEOUT` maior ou
 igual a esse visibility. O tratamento de cada mensagem tem prazo de `SQS_MESSAGE_TIMEOUT`
 (30 s por padrão) e não é cancelado pelo shutdown: termina dentro do prazo ou falha e volta
-para a fila.
+para a fila. O consumidor não recebe antes de reservar a vaga e não estende a visibilidade
+enquanto a mensagem espera ou está em tratamento.
 
 ## Transactional outbox
 

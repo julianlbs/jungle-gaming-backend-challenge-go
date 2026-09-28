@@ -6,7 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -247,6 +249,77 @@ func TestHandlerContinuesProducerTrace(t *testing.T) {
 	newTestConsumer(newFakeSQS(), h).handleGroup(context.Background(), "q", []types.Message{msg})
 	if h.traceParent != tp {
 		t.Fatalf("handler trace context = %q", h.traceParent)
+	}
+}
+
+type slotSQS struct {
+	*fakeSQS
+	first    types.Message
+	receives atomic.Int32
+	maxBatch atomic.Int32
+}
+
+func (s *slotSQS) ReceiveMessage(ctx context.Context, in *sqs.ReceiveMessageInput, _ ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
+	n := s.receives.Add(1)
+	if in != nil && in.MaxNumberOfMessages > s.maxBatch.Load() {
+		s.maxBatch.Store(in.MaxNumberOfMessages)
+	}
+	if n == 1 {
+		return &sqs.ReceiveMessageOutput{Messages: []types.Message{s.first}}, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type blockingHandler struct {
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (h *blockingHandler) Handle(context.Context, app.IncomingWager) (app.IntakeResult, error) {
+	h.once.Do(func() { close(h.started) })
+	<-h.release
+	return app.IntakeResult{Entry: app.InboxEntry{Outcome: app.InboxProcessed, TransactionID: uuid.New()}}, nil
+}
+
+func TestReceiveWaitsForWorkerSlot(t *testing.T) {
+	api := &slotSQS{fakeSQS: newFakeSQS(), first: message(t, "m1", "provider-a", "1")}
+	h := &blockingHandler{started: make(chan struct{}), release: make(chan struct{})}
+	c := New(api, h, Config{
+		Queues: []Queue{{ProviderID: "provider-a", URL: "q"}}, DLQURL: "dlq",
+		MaxInFlight: 1, WaitTime: time.Second,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); c.Run(ctx) }()
+
+	select {
+	case <-h.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := api.receives.Load(); got != 1 {
+		t.Fatalf("receives while the only slot is busy = %d", got)
+	}
+	if got := api.maxBatch.Load(); got != 1 {
+		t.Fatalf("MaxNumberOfMessages = %d, want 1", got)
+	}
+	api.mu.Lock()
+	extended := len(api.visibility)
+	api.mu.Unlock()
+	if extended != 0 {
+		t.Fatalf("visibility changed while processing: %d updates", extended)
+	}
+
+	close(h.release)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer did not stop")
 	}
 }
 
