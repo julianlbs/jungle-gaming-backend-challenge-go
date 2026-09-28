@@ -16,7 +16,9 @@ type PoolConfig struct {
 	MinConns          int32
 	MaxConnLifetime   time.Duration
 	HealthCheckPeriod time.Duration
-	Tracer            pgx.QueryTracer
+	// StatementTimeout is applied to every new session. Zero leaves the server default.
+	StatementTimeout time.Duration
+	Tracer           pgx.QueryTracer
 }
 
 func NewPool(ctx context.Context, cfg PoolConfig) (*pgxpool.Pool, error) {
@@ -38,6 +40,16 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*pgxpool.Pool, error) {
 	}
 	if cfg.Tracer != nil {
 		pc.ConnConfig.Tracer = cfg.Tracer
+	}
+	if cfg.StatementTimeout > 0 {
+		timeout := pgInterval(cfg.StatementTimeout)
+		pc.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			_, err := conn.Exec(ctx, "SELECT set_config('statement_timeout', $1, false)", timeout)
+			if err != nil {
+				return fmt.Errorf("set statement timeout: %w", err)
+			}
+			return nil
+		}
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {

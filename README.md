@@ -98,7 +98,7 @@ processo sai com código 2.
 | `MIGRATIONS_DATABASE_URL` | — | Conexão usada por `wallet migrate` (papel `wallet_owner`); se ausente, usa `DATABASE_URL` |
 | `DB_MAX_CONNS` | `20` | Tamanho máximo do pool |
 | `DB_LOCK_TIMEOUT` | `2s` | `lock_timeout` de cada transação |
-| `DB_STATEMENT_TIMEOUT` | `5s` | `statement_timeout` de cada transação |
+| `DB_STATEMENT_TIMEOUT` | `5s` | `statement_timeout` das transações, das leituras e da reconciliação; as leituras também usam esse prazo no contexto |
 | `DB_STARTUP_TIMEOUT` | `30s` | Tempo de espera pelo PostgreSQL na partida |
 | `OIDC_ISSUER` | obrigatória com `api` | Issuer esperado nos tokens |
 | `OIDC_JWKS_URL` | obrigatória com `api` | Endpoint JWKS (pode usar um hostname interno) |

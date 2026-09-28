@@ -89,7 +89,9 @@ var Postgres = fx.Module("postgres",
 		newPool,
 		newUnitOfWork,
 		func(u *postgres.UnitOfWork) app.UnitOfWork { return u },
-		postgres.NewReadModel,
+		func(pool *pgxpool.Pool, cfg config.Config) *postgres.ReadModel {
+			return postgres.NewReadModel(pool).WithQueryTimeout(cfg.Postgres.StatementTimeout)
+		},
 		func(pool *pgxpool.Pool) *postgres.PendingStore { return postgres.NewPendingStore(pool) },
 		func(pool *pgxpool.Pool) *postgres.OutboxStore { return postgres.NewOutboxStore(pool) },
 	),
@@ -115,9 +117,10 @@ var App = fx.Module("app",
 
 func newPool(lc fx.Lifecycle, cfg config.Config, log *slog.Logger) (*pgxpool.Pool, error) {
 	pool, err := postgres.NewPool(context.Background(), postgres.PoolConfig{
-		URL:      cfg.Postgres.URL,
-		MaxConns: cfg.Postgres.MaxConns,
-		Tracer:   otelpgx.NewTracer(),
+		URL:              cfg.Postgres.URL,
+		MaxConns:         cfg.Postgres.MaxConns,
+		StatementTimeout: cfg.Postgres.StatementTimeout,
+		Tracer:           otelpgx.NewTracer(),
 	})
 	if err != nil {
 		return nil, err

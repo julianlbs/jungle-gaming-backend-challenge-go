@@ -135,6 +135,9 @@ que mata o processo com `SIGKILL` exatamente ali. O terceiro ponto testado,
   (`DB_LOCK_TIMEOUT`) e `statement_timeout` (`DB_STATEMENT_TIMEOUT`) locais à transação, entrega
   ao caso de uso repositórios ligados a ela (`Wallets`, `Transactions`, `Ledger`, `Outbox`,
   `Inbox`) e faz o commit. A fronteira da transação é o caso de uso, nunca o repositório.
+- As leituras de `postgres.ReadModel`, inclusive a reconciliação somente leitura, usam o mesmo
+  `statement_timeout` e um prazo de contexto igual a `DB_STATEMENT_TIMEOUT`. O pool aplica
+  `statement_timeout` na sessão ao abrir cada conexão.
 - A transação inteira é repetida (até 4 tentativas, backoff exponencial com jitter de 20 ms a
   500 ms) para falhas transitórias: serialização, deadlock, `lock_timeout`/`statement_timeout`,
   erros de conexão e violações dos índices únicos que indicam corrida
